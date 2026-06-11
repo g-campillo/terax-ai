@@ -15,11 +15,17 @@ pub struct FrameDecoder {
 }
 
 impl FrameDecoder {
+    /// Decodes any complete frames accumulated so far. An `Err` means the
+    /// stream is desynced and is terminal: callers must drop the decoder and
+    /// the connection that feeds it rather than push further bytes.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, String> {
         self.buf.extend_from_slice(bytes);
         let mut messages = Vec::new();
         loop {
             let Some(header_end) = find_header_end(&self.buf) else {
+                // Caps incomplete headers only; a found header with a valid
+                // declared length may briefly hold more than the cap while a
+                // large body streams in. The body cap below bounds that case.
                 if self.buf.len() > MAX_FRAME_BYTES {
                     return Err("lsp frame header exceeds size cap".to_string());
                 }
@@ -121,5 +127,19 @@ mod tests {
         let mut d = FrameDecoder::default();
         let header = format!("Content-Length: {}\r\n\r\n", MAX_FRAME_BYTES + 1);
         assert!(d.push(header.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn decodes_empty_body_frame() {
+        let mut d = FrameDecoder::default();
+        let msgs = d.push(b"Content-Length: 0\r\n\r\n").unwrap();
+        assert_eq!(msgs, vec![String::new()]);
+    }
+
+    #[test]
+    fn rejects_header_exceeding_size_cap() {
+        let mut d = FrameDecoder::default();
+        let garbage = vec![b'X'; MAX_FRAME_BYTES + 1];
+        assert!(d.push(&garbage).is_err());
     }
 }
