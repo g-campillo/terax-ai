@@ -14,6 +14,12 @@ describe("pathToFileUri", () => {
   it("percent-encodes spaces", () => {
     expect(pathToFileUri("/a b/c.ts")).toBe("file:///a%20b/c.ts");
   });
+  it("percent-encodes hash and question mark in segments", () => {
+    expect(pathToFileUri("/a#b/c?.ts")).toBe("file:///a%23b/c%3F.ts");
+  });
+  it("keeps drive colons literal", () => {
+    expect(pathToFileUri("C:/a b/c#.ts")).toBe("file:///C:/a%20b/c%23.ts");
+  });
 });
 
 describe("fileUriToPath", () => {

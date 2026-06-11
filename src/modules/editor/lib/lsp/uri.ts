@@ -3,7 +3,14 @@
 export function pathToFileUri(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const prefixed = normalized.startsWith("/") ? normalized : `/${normalized}`;
-  return `file://${encodeURI(prefixed)}`;
+  // Per-segment encoding so # and ? in file names cannot truncate the URI;
+  // colons stay literal for Windows drive segments (legal in path segments).
+  const encoded = prefixed
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")
+    .replace(/%3A/gi, ":");
+  return `file://${encoded}`;
 }
 
 export function fileUriToPath(uri: string): string {
