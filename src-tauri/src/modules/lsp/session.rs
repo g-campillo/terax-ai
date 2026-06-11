@@ -21,7 +21,10 @@ pub struct LspSession {
 impl LspSession {
     pub fn send(&self, message: &str) -> Result<(), String> {
         let frame = encode_frame(message);
-        let mut stdin = self.stdin.lock().unwrap();
+        let mut stdin = self
+            .stdin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         stdin.write_all(&frame).map_err(|e| e.to_string())?;
         stdin.flush().map_err(|e| e.to_string())
     }
@@ -37,6 +40,8 @@ impl Drop for LspSession {
     }
 }
 
+/// Callbacks run on the session's reader and waiter threads: they must not
+/// block and must not call back into the session, or LSP reads stall.
 pub fn spawn(
     program: &str,
     args: &[String],
@@ -206,5 +211,63 @@ mod tests {
         exit_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("exit after kill");
+    }
+
+    #[test]
+    fn corrupt_stream_kills_server() {
+        let (exit_tx, exit_rx) = mpsc::channel::<i32>();
+        let script = r#"printf 'not-a-header\r\n\r\nxx'; sleep 30"#;
+        let _session = spawn(
+            "/bin/sh",
+            &["-c".to_string(), script.to_string()],
+            "/tmp",
+            |_| {},
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn corrupt server");
+        exit_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server killed after corrupt frame");
+    }
+
+    #[test]
+    fn drop_kills_child_and_reports_exit() {
+        let (exit_tx, exit_rx) = mpsc::channel::<i32>();
+        let session = spawn(
+            "/bin/sh",
+            &["-c".to_string(), "sleep 30".to_string()],
+            "/tmp",
+            |_| {},
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn");
+        drop(session);
+        exit_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("exit after drop");
+    }
+
+    #[test]
+    fn send_after_child_death_errors() {
+        let (exit_tx, exit_rx) = mpsc::channel::<i32>();
+        let session = spawn(
+            "/bin/sh",
+            &["-c".to_string(), "exit 0".to_string()],
+            "/tmp",
+            |_| {},
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn");
+        exit_rx.recv_timeout(Duration::from_secs(5)).expect("exit");
+        // The pipe may need two writes before EPIPE surfaces reliably.
+        let first = session.send(r#"{"id":1}"#);
+        let second = session.send(r#"{"id":2}"#);
+        assert!(first.is_err() || second.is_err());
     }
 }
