@@ -125,6 +125,9 @@ importers:
       '@marimo-team/codemirror-languageserver':
         specifier: ^1.16.12
         version: 1.16.12(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)
+      '@open-rpc/client-js':
+        specifier: ^1.8.1
+        version: 1.8.1
       '@radix-ui/react-use-controllable-state':
         specifier: ^1.2.2
         version: 1.2.2(@types/react@19.2.16)(react@19.2.7)
