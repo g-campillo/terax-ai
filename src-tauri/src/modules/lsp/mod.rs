@@ -110,13 +110,17 @@ pub fn lsp_send(
         .unwrap()
         .get(&id)
         .cloned()
-        .ok_or_else(|| "no lsp session".to_string())?;
+        .ok_or_else(|| {
+            log::warn!("lsp_send: unknown id={id}");
+            format!("no lsp session id={id}")
+        })?;
     session.send(&message)
 }
 
 #[tauri::command]
 pub fn lsp_stop(state: tauri::State<'_, LspState>, id: u32) -> Result<(), String> {
-    if let Some(session) = state.sessions.write().unwrap().remove(&id) {
+    let session = state.sessions.write().unwrap().remove(&id);
+    if let Some(session) = session {
         session.kill();
         log::info!("lsp stopped id={id}");
     }
