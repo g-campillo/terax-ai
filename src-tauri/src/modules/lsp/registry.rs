@@ -22,7 +22,7 @@ pub const SERVERS: &[ServerDef] = &[
         id: "python",
         display: "Python",
         extensions: &["py", "pyi"],
-        binaries: &["basedpyright-langserver", "pyright-langserver"],
+        binaries: &["pyright-langserver", "basedpyright-langserver"],
         args: &["--stdio"],
         install_hint: "npm install -g pyright",
     },
@@ -96,6 +96,19 @@ fn candidate_dirs() -> Vec<PathBuf> {
     out
 }
 
+#[cfg(unix)]
+fn is_executable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    p.metadata()
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &std::path::Path) -> bool {
+    p.is_file()
+}
+
 pub fn find_binary_in(names: &[&str], dirs: &[PathBuf]) -> Option<PathBuf> {
     #[cfg(windows)]
     let suffixes: &[&str] = &[".exe", ".cmd", ".bat"];
@@ -105,7 +118,7 @@ pub fn find_binary_in(names: &[&str], dirs: &[PathBuf]) -> Option<PathBuf> {
         for name in names {
             for suffix in suffixes {
                 let p = dir.join(format!("{name}{suffix}"));
-                if p.is_file() {
+                if is_executable(&p) {
                     return Some(p);
                 }
             }
@@ -187,5 +200,13 @@ mod tests {
     fn find_binary_misses_absent_executable() {
         let dir = tempfile::tempdir().unwrap();
         assert!(find_binary_in(&["nope-ls"], &[dir.path().to_path_buf()]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_binary_skips_non_executable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("fake-ls"), b"").unwrap();
+        assert!(find_binary_in(&["fake-ls"], &[dir.path().to_path_buf()]).is_none());
     }
 }
