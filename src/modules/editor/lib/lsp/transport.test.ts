@@ -73,4 +73,69 @@ describe("TauriLspTransport", () => {
     t.close();
     expect(invokeMock).toHaveBeenCalledWith("lsp_stop", { id: 7 });
   });
+
+  it("resolves the sendData promise when the matching response arrives", async () => {
+    invokeMock.mockResolvedValue(7);
+    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    await t.connect();
+    invokeMock.mockResolvedValue(undefined);
+    // internalID must match the wire id so TransportRequestManager can correlate
+    const reqData = {
+      internalID: 1,
+      request: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    } as never;
+    const prom = t.sendData(reqData, 30000);
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("lsp_send", expect.anything());
+    });
+    channelHandler?.({
+      type: "message",
+      data: JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }),
+    });
+    // TransportRequestManager unwraps the envelope and resolves with payload.result
+    await expect(prom).resolves.toMatchObject({ ok: true });
+  });
+
+  it("answers workspace/configuration server requests", async () => {
+    invokeMock.mockResolvedValue(7);
+    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    await t.connect();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    channelHandler?.({
+      type: "message",
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 42,
+        method: "workspace/configuration",
+        params: { items: [{ section: "a" }, { section: "b" }] },
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "lsp_send",
+        expect.objectContaining({
+          id: 7,
+          message: JSON.stringify({ jsonrpc: "2.0", id: 42, result: [null, null] }),
+        }),
+      );
+    });
+  });
+
+  it("rejects in-flight requests when the server exits", async () => {
+    invokeMock.mockResolvedValue(7);
+    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    await t.connect();
+    invokeMock.mockResolvedValue(undefined);
+    const reqData = {
+      internalID: 1,
+      request: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    } as never;
+    const prom = t.sendData(reqData, 30000);
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("lsp_send", expect.anything());
+    });
+    channelHandler?.({ type: "exited", code: 1 });
+    await expect(prom).rejects.toThrow(/exited/);
+  });
 });
