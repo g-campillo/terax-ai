@@ -31,6 +31,7 @@ import {
   setTerminalFontSize,
   setTerminalCursorBlink,
   setTerminalScrollback,
+  setLspEnabled,
   setTerminalWebglEnabled,
   setVimMode,
   setZoomLevel,
@@ -87,6 +88,7 @@ export function GeneralSection() {
   const terminalFontSize = usePreferencesStore((s) => s.terminalFontSize);
   const terminalScrollback = usePreferencesStore((s) => s.terminalScrollback);
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
+  const lspEnabled = usePreferencesStore((s) => s.lspEnabled);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
 
   useEffect(() => {
@@ -170,6 +172,15 @@ export function GeneralSection() {
 
       <div className="flex flex-col gap-2">
         <Label>Editor</Label>
+        <SettingRow
+          title="Language intelligence"
+          description="Completions, errors, hover docs, and go-to-definition from language servers found on this machine."
+        >
+          <Switch
+            checked={lspEnabled}
+            onCheckedChange={(v) => void setLspEnabled(v)}
+          />
+        </SettingRow>
         <SettingRow
           title="Vim mode"
           description="Enable Vim keybindings in the code editor."
