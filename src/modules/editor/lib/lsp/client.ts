@@ -13,6 +13,7 @@ type Entry = {
   restarts: number;
   restartTimer: ReturnType<typeof setTimeout> | null;
   errorListeners: Set<(message: string) => void>;
+  errored: boolean;
 };
 
 const entries = new Map<string, Entry>();
@@ -30,7 +31,8 @@ function buildClient(language: string, root: string, key: string): LanguageServe
         // Normal shutdown path: entry removed or no live refs.
         if (!entry || entry.refs <= 0) return;
         if (entry.restarts >= MAX_RESTARTS) {
-          // Only fire the first time restarts are exhausted; subsequent exits are silent.
+          // Mark entry permanently dead so a later acquire can self-heal.
+          entry.errored = true;
           if (entry.errorListeners.size > 0) {
             const msg = `language server crashed repeatedly (exit code ${code})`;
             for (const listener of entry.errorListeners) {
@@ -46,6 +48,12 @@ function buildClient(language: string, root: string, key: string): LanguageServe
           entry.restartTimer = null;
           const current = entries.get(key);
           if (!current || current.refs <= 0) return;
+          // Release JS resources from the dead client before replacing it.
+          try {
+            current.client.close();
+          } catch {
+            // Process is already gone; ignore close errors.
+          }
           current.client = buildClient(language, root, key);
         }, delay);
       },
@@ -64,6 +72,31 @@ export function acquireLspClient(
   const key = keyOf(language, root);
   const existing = entries.get(key);
   if (existing) {
+    if (existing.errored) {
+      // The previous server exhausted its restart budget; replace it so the
+      // caller gets a live client rather than a permanently dead one.
+      try {
+        existing.client.close();
+      } catch {
+        // Best-effort; the process is already dead.
+      }
+      if (existing.restartTimer) {
+        clearTimeout(existing.restartTimer);
+        existing.restartTimer = null;
+      }
+      const fresh = buildClient(language, root, key);
+      entries.set(key, {
+        client: fresh,
+        // Preserve the ref count from existing holders plus this new caller.
+        refs: existing.refs + 1,
+        idleTimer: null,
+        restarts: 0,
+        restartTimer: null,
+        errorListeners: existing.errorListeners,
+        errored: false,
+      });
+      return fresh;
+    }
     existing.refs += 1;
     if (existing.idleTimer) {
       clearTimeout(existing.idleTimer);
@@ -79,6 +112,7 @@ export function acquireLspClient(
     restarts: 0,
     restartTimer: null,
     errorListeners: new Set(),
+    errored: false,
   });
   return client;
 }
@@ -111,6 +145,12 @@ export function onLspClientError(
 ): () => void {
   const entry = entries.get(keyOf(language, root));
   if (!entry) return () => {};
+  // If the entry is already in the errored state, fire immediately so the
+  // caller does not register a listener that can never be invoked.
+  if (entry.errored) {
+    listener("language server crashed repeatedly");
+    return () => {};
+  }
   entry.errorListeners.add(listener);
   return () => {
     entry.errorListeners.delete(listener);

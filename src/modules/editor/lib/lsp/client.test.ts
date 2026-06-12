@@ -22,6 +22,13 @@ vi.mock("./transport", () => ({
 
 import { acquireLspClient, releaseLspClient, onLspClientError, __resetLspClientsForTest } from "./client";
 
+// Returns the onExit options from the most-recently constructed transport so
+// tests can trigger crash callbacks without duplicating the cast.
+const lastTransportOpts = () =>
+  transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as {
+    onExit?: (c: number) => void;
+  };
+
 describe("lsp client cache", () => {
   beforeEach(() => {
     __resetLspClientsForTest();
@@ -75,8 +82,7 @@ describe("lsp client cache", () => {
     acquireLspClient("go", "/repo");
     expect(clientCtor).toHaveBeenCalledTimes(1);
     for (let i = 0; i < 5; i++) {
-      const opts = transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as { onExit?: (c: number) => void };
-      opts.onExit?.(1);
+      lastTransportOpts().onExit?.(1);
       vi.runOnlyPendingTimers();
     }
     expect(clientCtor).toHaveBeenCalledTimes(4);
@@ -88,8 +94,7 @@ describe("lsp client cache", () => {
     const onError = vi.fn();
     onLspClientError("go", "/repo", onError);
     for (let i = 0; i < 5; i++) {
-      const opts = transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as { onExit?: (c: number) => void };
-      opts.onExit?.(1);
+      lastTransportOpts().onExit?.(1);
       vi.runOnlyPendingTimers();
     }
     expect(onError).toHaveBeenCalledTimes(1);
@@ -101,9 +106,45 @@ describe("lsp client cache", () => {
     acquireLspClient("go", "/repo");
     releaseLspClient("go", "/repo");
     vi.advanceTimersByTime(5 * 60 * 1000);
-    const opts = transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as { onExit?: (c: number) => void };
-    opts.onExit?.(0);
+    lastTransportOpts().onExit?.(0);
     vi.runOnlyPendingTimers();
     expect(clientCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off exponentially between restarts", () => {
+    acquireLspClient("go", "/repo");
+    expect(clientCtor).toHaveBeenCalledTimes(1);
+    let opts = lastTransportOpts();
+    opts.onExit?.(1);
+    vi.advanceTimersByTime(999);
+    expect(clientCtor).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(clientCtor).toHaveBeenCalledTimes(2);
+    opts = lastTransportOpts();
+    opts.onExit?.(1);
+    vi.advanceTimersByTime(1999);
+    expect(clientCtor).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(clientCtor).toHaveBeenCalledTimes(3);
+    releaseLspClient("go", "/repo");
+  });
+
+  it("self-heals an errored entry on a later acquire", () => {
+    acquireLspClient("go", "/repo");
+    for (let i = 0; i < 5; i++) {
+      lastTransportOpts().onExit?.(1);
+      vi.runOnlyPendingTimers();
+    }
+    const ctorCallsAfterExhaustion = clientCtor.mock.calls.length;
+    // ctorCallsAfterExhaustion is 4: original + 3 restarts.
+    // The 4th onExit sets errored=true without building another client.
+    const fresh = acquireLspClient("go", "/repo");
+    expect(clientCtor.mock.calls.length).toBe(ctorCallsAfterExhaustion + 1);
+    expect(fresh).toBeDefined();
+    const onError = vi.fn();
+    onLspClientError("go", "/repo", onError);
+    expect(onError).not.toHaveBeenCalled();
+    releaseLspClient("go", "/repo");
+    releaseLspClient("go", "/repo");
   });
 });
