@@ -92,13 +92,13 @@ export function buildSharedExtensions(): Extension[] {
         color: "var(--popover-foreground)",
         borderColor: "var(--border)",
       },
-      ".cm-tooltip": {
+      "&.cm-editor .cm-tooltip": {
         backgroundColor: "var(--popover)",
         color: "var(--popover-foreground)",
         border: "1px solid var(--border)",
         borderRadius: "6px",
       },
-      ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+      "&.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
         backgroundColor:
           "color-mix(in srgb, var(--foreground) 10%, transparent)",
         color: "var(--popover-foreground)",

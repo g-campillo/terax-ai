@@ -301,6 +301,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
               label: result.status.display,
               hint: result.status.installHint,
             });
+          } else {
+            // disabled / unsupported: remove the pill immediately
+            useLspStatusStore.getState().clearStatus(path);
           }
           view?.dispatch({ effects: lspCompartment.reconfigure([]) });
         }

@@ -33,7 +33,9 @@ export function LspStatusPill({ filePath }: Props) {
       <TooltipContent side="top" className="max-w-72 text-[11px] leading-relaxed">
         {status.state === "running" && "Language server connected."}
         {status.state === "missing" &&
-          `No language server found. Install with: ${status.hint ?? ""}`}
+          (status.hint
+            ? `No language server found. Install with: ${status.hint}`
+            : "No language server found.")}
         {status.state === "error" && (status.hint ?? "Language server error.")}
       </TooltipContent>
     </Tooltip>
