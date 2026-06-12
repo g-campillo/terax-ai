@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const closeMock = vi.fn();
 const clientCtor = vi.fn();
+const transportCtor = vi.fn();
 
 vi.mock("@marimo-team/codemirror-languageserver", () => ({
   LanguageServerClient: class {
@@ -12,10 +13,14 @@ vi.mock("@marimo-team/codemirror-languageserver", () => ({
   },
 }));
 vi.mock("./transport", () => ({
-  TauriLspTransport: class {},
+  TauriLspTransport: class {
+    constructor(opts: unknown) {
+      transportCtor(opts);
+    }
+  },
 }));
 
-import { acquireLspClient, releaseLspClient, __resetLspClientsForTest } from "./client";
+import { acquireLspClient, releaseLspClient, onLspClientError, __resetLspClientsForTest } from "./client";
 
 describe("lsp client cache", () => {
   beforeEach(() => {
@@ -23,6 +28,7 @@ describe("lsp client cache", () => {
     vi.useFakeTimers();
     closeMock.mockClear();
     clientCtor.mockClear();
+    transportCtor.mockClear();
   });
   afterEach(() => {
     vi.runAllTimers();
@@ -63,5 +69,41 @@ describe("lsp client cache", () => {
     expect(closeMock).not.toHaveBeenCalled();
     expect(a).toBe(b);
     releaseLspClient("rust", "/repo");
+  });
+
+  it("recreates the client on unexpected exit at most three times", () => {
+    acquireLspClient("go", "/repo");
+    expect(clientCtor).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 5; i++) {
+      const opts = transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as { onExit?: (c: number) => void };
+      opts.onExit?.(1);
+      vi.runOnlyPendingTimers();
+    }
+    expect(clientCtor).toHaveBeenCalledTimes(4);
+    releaseLspClient("go", "/repo");
+  });
+
+  it("notifies error listeners when restarts are exhausted", () => {
+    acquireLspClient("go", "/repo");
+    const onError = vi.fn();
+    onLspClientError("go", "/repo", onError);
+    for (let i = 0; i < 5; i++) {
+      const opts = transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as { onExit?: (c: number) => void };
+      opts.onExit?.(1);
+      vi.runOnlyPendingTimers();
+    }
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toMatch(/crashed/);
+    releaseLspClient("go", "/repo");
+  });
+
+  it("does not restart after a normal release-driven shutdown", () => {
+    acquireLspClient("go", "/repo");
+    releaseLspClient("go", "/repo");
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    const opts = transportCtor.mock.calls[transportCtor.mock.calls.length - 1]?.[0] as { onExit?: (c: number) => void };
+    opts.onExit?.(0);
+    vi.runOnlyPendingTimers();
+    expect(clientCtor).toHaveBeenCalledTimes(1);
   });
 });

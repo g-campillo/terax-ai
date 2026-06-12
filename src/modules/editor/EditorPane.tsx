@@ -260,6 +260,10 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
       onOpenFileAtRef.current = onOpenFileAt;
     }, [onOpenFileAt]);
     const lspReleaseRef = useRef<(() => void) | null>(null);
+    // Holds the display label once a ready handle is installed; the onServerError
+    // closure reads it so it always uses the most recent label without re-creating
+    // the callback on every render.
+    const lspDisplayLabelRef = useRef<string | null>(null);
 
     useEffect(() => {
       if (doc.status !== "ready" || !workspaceRoot) return;
@@ -276,6 +280,13 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
           path,
           workspaceRoot,
           onOpenFileAt: (p, line) => onOpenFileAtRef.current?.(p, line),
+          onServerError: (message) => {
+            useLspStatusStore.getState().setStatus(path, {
+              state: "error",
+              label: lspDisplayLabelRef.current ?? "",
+              hint: message,
+            });
+          },
         });
         if (cancelled || myGen !== generation) {
           if (result.kind === "ready") result.handle.release();
@@ -286,6 +297,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         const view = cmRef.current?.view;
         if (result.kind === "ready") {
           lspReleaseRef.current = result.handle.release;
+          lspDisplayLabelRef.current = result.handle.status.display;
           useLspStatusStore.getState().setStatus(path, {
             state: "running",
             label: result.handle.status.display,

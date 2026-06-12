@@ -2,7 +2,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import { invoke } from "@tauri-apps/api/core";
 import type { Extension } from "@codemirror/state";
 import { languageServerWithClient } from "@marimo-team/codemirror-languageserver";
-import { acquireLspClient, releaseLspClient } from "./client";
+import { acquireLspClient, onLspClientError, releaseLspClient } from "./client";
 import { lspLanguageFor } from "./languages";
 import { fileUriToPath, pathToFileUri } from "./uri";
 
@@ -30,12 +30,14 @@ type Deps = {
   path: string;
   workspaceRoot: string;
   onOpenFileAt: (path: string, line: number) => void;
+  onServerError?: (message: string) => void;
 };
 
 export async function resolveLspExtension({
   path,
   workspaceRoot,
   onOpenFileAt,
+  onServerError,
 }: Deps): Promise<LspResolveResult> {
   const lang = lspLanguageFor(path);
   if (!lang) return { kind: "unsupported" };
@@ -47,6 +49,9 @@ export async function resolveLspExtension({
   if (!status.available) return { kind: "missing-server", status };
 
   const client = acquireLspClient(lang.server, workspaceRoot);
+  const offError = onLspClientError(lang.server, workspaceRoot, (message) => {
+    onServerError?.(message);
+  });
   let released = false;
   // LanguageServerOptions extends FeatureOptions directly -- feature flags are
   // top-level, not nested under a featureOptions key.
@@ -77,6 +82,7 @@ export async function resolveLspExtension({
       release: () => {
         if (released) return;
         released = true;
+        offError();
         releaseLspClient(lang.server, workspaceRoot);
       },
     },
