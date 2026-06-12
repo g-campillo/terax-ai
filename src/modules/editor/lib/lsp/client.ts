@@ -12,7 +12,7 @@ type Entry = {
 
 const entries = new Map<string, Entry>();
 
-const keyOf = (language: string, root: string) => `${language} ${root}`;
+const keyOf = (language: string, root: string) => `${language}\0${root}`;
 
 export function acquireLspClient(
   language: string,
@@ -43,10 +43,22 @@ export function acquireLspClient(
 export function releaseLspClient(language: string, root: string): void {
   const entry = entries.get(keyOf(language, root));
   if (!entry) return;
+  if (entry.refs <= 0) {
+    console.warn("lsp: releaseLspClient called more times than acquire");
+    return;
+  }
   entry.refs -= 1;
   if (entry.refs > 0) return;
   entry.idleTimer = setTimeout(() => {
+    // Remove from cache first so a re-acquire during close() gets a fresh client.
     entries.delete(keyOf(language, root));
     entry.client.close();
   }, IDLE_SHUTDOWN_MS);
+}
+
+export function __resetLspClientsForTest(): void {
+  for (const entry of entries.values()) {
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+  }
+  entries.clear();
 }

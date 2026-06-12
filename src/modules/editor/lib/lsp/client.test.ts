@@ -15,10 +15,11 @@ vi.mock("./transport", () => ({
   TauriLspTransport: class {},
 }));
 
-import { acquireLspClient, releaseLspClient } from "./client";
+import { acquireLspClient, releaseLspClient, __resetLspClientsForTest } from "./client";
 
 describe("lsp client cache", () => {
   beforeEach(() => {
+    __resetLspClientsForTest();
     vi.useFakeTimers();
     closeMock.mockClear();
     clientCtor.mockClear();
