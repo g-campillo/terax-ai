@@ -40,8 +40,7 @@ export async function resolveLspExtension({
   const lang = lspLanguageFor(path);
   if (!lang) return { kind: "unsupported" };
   const prefs = usePreferencesStore.getState();
-  // lspEnabled will be added to Preferences in a later task; access via type assertion.
-  if (!(prefs as unknown as Record<string, unknown>).lspEnabled) return { kind: "disabled" };
+  if (!prefs.lspEnabled) return { kind: "disabled" };
   const status = await invoke<LspServerStatus>("lsp_status", {
     language: lang.server,
   });

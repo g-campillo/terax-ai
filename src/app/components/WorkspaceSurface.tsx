@@ -25,6 +25,8 @@ type Props = {
   registerEditorHandle: EditorStackProps["registerHandle"];
   onEditorDirtyChange: EditorStackProps["onDirtyChange"];
   onEditorCloseTab: EditorStackProps["onCloseTab"];
+  editorWorkspaceRoot: EditorStackProps["workspaceRoot"];
+  onEditorOpenFileAt: EditorStackProps["onOpenFileAt"];
   registerPreviewHandle: PreviewStackProps["registerHandle"];
   onPreviewUrlChange: PreviewStackProps["onUrlChange"];
   onAiDiffAccept: AiDiffStackProps["onAccept"];
@@ -50,6 +52,8 @@ export function WorkspaceSurface({
   registerEditorHandle,
   onEditorDirtyChange,
   onEditorCloseTab,
+  editorWorkspaceRoot,
+  onEditorOpenFileAt,
   registerPreviewHandle,
   onPreviewUrlChange,
   onAiDiffAccept,
@@ -98,6 +102,8 @@ export function WorkspaceSurface({
           registerHandle={registerEditorHandle}
           onDirtyChange={onEditorDirtyChange}
           onCloseTab={onEditorCloseTab}
+          workspaceRoot={editorWorkspaceRoot}
+          onOpenFileAt={onEditorOpenFileAt}
         />
       </div>
       <div

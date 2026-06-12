@@ -25,6 +25,7 @@ import { inlineCompletion } from "./lib/autocomplete/inlineExtension";
 import {
   buildSharedExtensions,
   languageCompartment,
+  lspCompartment,
   vimCompartment,
 } from "./lib/extensions";
 import { resolveLanguage } from "./lib/languageResolver";
@@ -53,6 +54,8 @@ export type EditorPaneHandle = {
 
 type Props = {
   path: string;
+  workspaceRoot?: string | null;
+  onOpenFileAt?: (path: string, line: number) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
@@ -65,7 +68,10 @@ function formatBytes(n: number): string {
 }
 
 export const EditorPane = forwardRef<EditorPaneHandle, Props>(
-  function EditorPane({ path, onDirtyChange, onSaved, onClose }, ref) {
+  function EditorPane(
+    { path, workspaceRoot, onOpenFileAt, onDirtyChange, onSaved, onClose },
+    ref,
+  ) {
     const { doc, onChange, save, reload } = useDocument({
       path,
       onDirtyChange,
@@ -165,6 +171,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         })),
         ...buildSharedExtensions(),
         languageCompartment.of([]),
+        lspCompartment.of([]),
         inlineCompletion({
           getPrefs: () => {
             const s = usePreferencesStore.getState();
@@ -247,6 +254,80 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         cancelled = true;
       };
     }, [path, doc.status]);
+
+    const onOpenFileAtRef = useRef(onOpenFileAt);
+    useEffect(() => {
+      onOpenFileAtRef.current = onOpenFileAt;
+    }, [onOpenFileAt]);
+    const lspReleaseRef = useRef<(() => void) | null>(null);
+
+    useEffect(() => {
+      if (doc.status !== "ready" || !workspaceRoot) return;
+      let cancelled = false;
+      // Generation counter closes the rapid-flip double-resolve race: a newer
+      // apply() cancels any in-flight older apply() before it can install.
+      let generation = 0;
+
+      const apply = async () => {
+        const myGen = ++generation;
+        const { resolveLspExtension } = await import("./lib/lsp/extension");
+        const { useLspStatusStore } = await import("./lib/lsp/statusStore");
+        const result = await resolveLspExtension({
+          path,
+          workspaceRoot,
+          onOpenFileAt: (p, line) => onOpenFileAtRef.current?.(p, line),
+        });
+        if (cancelled || myGen !== generation) {
+          if (result.kind === "ready") result.handle.release();
+          return;
+        }
+        lspReleaseRef.current?.();
+        lspReleaseRef.current = null;
+        const view = cmRef.current?.view;
+        if (result.kind === "ready") {
+          lspReleaseRef.current = result.handle.release;
+          useLspStatusStore.getState().setStatus(path, {
+            state: "running",
+            label: result.handle.status.display,
+            hint: null,
+          });
+          view?.dispatch({
+            effects: lspCompartment.reconfigure(result.handle.extension),
+          });
+        } else {
+          if (result.kind === "missing-server") {
+            useLspStatusStore.getState().setStatus(path, {
+              state: "missing",
+              label: result.status.display,
+              hint: result.status.installHint,
+            });
+          }
+          view?.dispatch({ effects: lspCompartment.reconfigure([]) });
+        }
+      };
+      void apply();
+
+      // Ghost-text autocomplete and the LSP popup are mutually exclusive, and
+      // the master toggle can flip at runtime: rebuild on either change.
+      const unsub = usePreferencesStore.subscribe((state, prev) => {
+        if (
+          state.autocompleteEnabled !== prev.autocompleteEnabled ||
+          state.lspEnabled !== prev.lspEnabled
+        ) {
+          void apply();
+        }
+      });
+
+      return () => {
+        cancelled = true;
+        unsub();
+        lspReleaseRef.current?.();
+        lspReleaseRef.current = null;
+        void import("./lib/lsp/statusStore").then(({ useLspStatusStore }) =>
+          useLspStatusStore.getState().clearStatus(path),
+        );
+      };
+    }, [path, doc.status, workspaceRoot]);
 
     useImperativeHandle(
       ref,

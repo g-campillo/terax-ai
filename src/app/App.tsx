@@ -1078,6 +1078,8 @@ export default function App() {
                       registerEditorHandle={registerEditorHandle}
                       onEditorDirtyChange={handleEditorDirty}
                       onEditorCloseTab={disposeTab}
+                      editorWorkspaceRoot={explorerRoot}
+                      onEditorOpenFileAt={openContentHit}
                       registerPreviewHandle={registerPreviewHandle}
                       onPreviewUrlChange={handlePreviewUrl}
                       onAiDiffAccept={(id) => respondToApproval(id, true)}

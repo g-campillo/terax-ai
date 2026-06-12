@@ -9,6 +9,8 @@ type Props = {
   onDirtyChange: (id: number, dirty: boolean) => void;
   registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
   onCloseTab: (id: number) => void;
+  workspaceRoot: string | null;
+  onOpenFileAt: (path: string, line: number) => void;
 };
 
 export function EditorStack({
@@ -17,6 +19,8 @@ export function EditorStack({
   onDirtyChange,
   registerHandle,
   onCloseTab,
+  workspaceRoot,
+  onOpenFileAt,
 }: Props) {
   const editors = tabs.filter(
     (t): t is EditorTab => t.kind === "editor" && !t.cold,
@@ -104,6 +108,8 @@ export function EditorStack({
                 path={t.path}
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
+                workspaceRoot={workspaceRoot}
+                onOpenFileAt={onOpenFileAt}
               />
             </div>
           </div>
