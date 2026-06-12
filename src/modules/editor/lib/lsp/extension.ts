@@ -55,7 +55,8 @@ export async function resolveLspExtension({
     client,
     documentUri: pathToFileUri(path),
     languageId: lang.languageId,
-    completionEnabled: prefs.autocompleteEnabled,
+    // AI ghost text and the LSP popup are mutually exclusive by design.
+    completionEnabled: !prefs.autocompleteEnabled,
     hoverEnabled: true,
     diagnosticsEnabled: true,
     definitionEnabled: true,
