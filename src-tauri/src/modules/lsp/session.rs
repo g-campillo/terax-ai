@@ -46,6 +46,7 @@ pub fn spawn(
     program: &str,
     args: &[String],
     cwd: &str,
+    envs: &[(String, String)],
     on_message: impl Fn(String) + Send + 'static,
     on_exit: impl FnOnce(i32) + Send + 'static,
 ) -> Result<Arc<LspSession>, String> {
@@ -55,6 +56,9 @@ pub fn spawn(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -150,6 +154,28 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn spawn_applies_env_overrides() {
+        let (msg_tx, msg_rx) = mpsc::channel::<String>();
+        // The child echoes an injected env var back inside a framed message.
+        let script =
+            r#"body="$LSP_TEST_VAR"; printf 'Content-Length: %d\r\n\r\n%s' ${#body} "$body""#;
+        let session = spawn(
+            "/bin/sh",
+            &["-c".to_string(), script.to_string()],
+            "/tmp",
+            &[("LSP_TEST_VAR".to_string(), "jdk-from-env".to_string())],
+            move |m| {
+                let _ = msg_tx.send(m);
+            },
+            |_| {},
+        )
+        .expect("spawn with env");
+        let msg = msg_rx.recv_timeout(Duration::from_secs(5)).expect("message");
+        assert_eq!(msg, "jdk-from-env");
+        session.kill();
+    }
+
+    #[test]
     fn reads_framed_message_and_reports_exit() {
         let (msg_tx, msg_rx) = mpsc::channel::<String>();
         let (exit_tx, exit_rx) = mpsc::channel::<i32>();
@@ -158,6 +184,7 @@ mod tests {
             "/bin/sh",
             &["-c".to_string(), script.to_string()],
             "/tmp",
+            &[],
             move |m| {
                 let _ = msg_tx.send(m);
             },
@@ -182,6 +209,7 @@ mod tests {
             "/bin/cat",
             &[],
             "/tmp",
+            &[],
             move |m| {
                 let _ = msg_tx.send(m);
             },
@@ -201,6 +229,7 @@ mod tests {
             "/bin/sh",
             &["-c".to_string(), "sleep 30".to_string()],
             "/tmp",
+            &[],
             |_| {},
             move |code| {
                 let _ = exit_tx.send(code);
@@ -221,6 +250,7 @@ mod tests {
             "/bin/sh",
             &["-c".to_string(), script.to_string()],
             "/tmp",
+            &[],
             |_| {},
             move |code| {
                 let _ = exit_tx.send(code);
@@ -239,6 +269,7 @@ mod tests {
             "/bin/sh",
             &["-c".to_string(), "sleep 30".to_string()],
             "/tmp",
+            &[],
             |_| {},
             move |code| {
                 let _ = exit_tx.send(code);
@@ -258,6 +289,7 @@ mod tests {
             "/bin/sh",
             &["-c".to_string(), "exit 0".to_string()],
             "/tmp",
+            &[],
             |_| {},
             move |code| {
                 let _ = exit_tx.send(code);
