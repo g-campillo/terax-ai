@@ -42,6 +42,10 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // @open-rpc/client-js's Transport base class does `new EventEmitter()` from
+      // Node's `events`, which Vite externalizes for the browser (-> undefined),
+      // crashing the LSP transport. Point `events` at the polyfill so it's bundled.
+      events: path.resolve(__dirname, "node_modules/events"),
     },
   },
   build: {
