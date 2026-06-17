@@ -87,7 +87,11 @@ export class TauriLspTransport extends Transport {
 
   async sendData(
     data: JSONRPCRequestData,
-    timeout: number | null = 5000,
+    // The marimo client always passes its configured request timeout, so this
+    // default only applies to callers that omit one (notifications, which settle
+    // as soon as the send resolves). `null` = no artificial cap; the effective
+    // request ceiling is the client's `timeout` (see LSP_REQUEST_TIMEOUT_MS).
+    timeout: number | null = null,
   ): Promise<unknown> {
     const prom = this.transportRequestManager.addRequest(data, timeout);
     this.inflight.add(data);

@@ -5,6 +5,12 @@ import { pathToFileUri } from "./uri";
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
 const MAX_RESTARTS = 3;
 const RESTART_BASE_MS = 1000;
+// Heavyweight servers (jdtls, sourcekit-lsp) routinely need far longer than the
+// marimo client's 10s default to answer the first completion or to finish
+// `initialize` while they index a project. Without a generous ceiling those
+// slow-but-healthy responses are rejected and silently dropped, so completions
+// never appear. The client uses this for every request and 3x it for initialize.
+const LSP_REQUEST_TIMEOUT_MS = 60_000;
 
 type Entry = {
   client: LanguageServerClient;
@@ -62,6 +68,30 @@ function buildClient(language: string, root: string, key: string): LanguageServe
     workspaceFolders: [
       { name: root.split("/").filter(Boolean).pop() ?? root, uri: rootUri },
     ],
+    timeout: LSP_REQUEST_TIMEOUT_MS,
+    // Force servers to report capabilities statically in the initialize
+    // response. With dynamicRegistration enabled, jdtls / sourcekit-lsp omit
+    // `completionProvider` (etc.) and register them later via
+    // client/registerCapability -- which this client doesn't process, so the
+    // capability never lands and completion/hover/definition silently no-op.
+    capabilities: (defaults) => ({
+      ...defaults,
+      textDocument: {
+        ...defaults?.textDocument,
+        completion: {
+          ...defaults?.textDocument?.completion,
+          dynamicRegistration: false,
+        },
+        hover: {
+          ...defaults?.textDocument?.hover,
+          dynamicRegistration: false,
+        },
+        definition: {
+          ...defaults?.textDocument?.definition,
+          dynamicRegistration: false,
+        },
+      },
+    }),
   });
 }
 

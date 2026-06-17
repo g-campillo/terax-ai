@@ -19,6 +19,8 @@ export function LspStatusPill({ filePath }: Props) {
         <span
           className={cn(
             "flex shrink-0 cursor-default items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium",
+            status.state === "indexing" &&
+              "bg-amber-500/10 text-amber-700 dark:text-amber-400",
             status.state === "running" &&
               "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
             status.state === "missing" &&
@@ -27,11 +29,21 @@ export function LspStatusPill({ filePath }: Props) {
               "bg-red-500/10 text-red-700 dark:text-red-400",
           )}
         >
-          {status.label}
+          <span
+            className={cn(
+              "size-1.5 rounded-full bg-current",
+              status.state === "indexing" && "animate-pulse",
+            )}
+          />
+          {status.state === "indexing"
+            ? `${status.label} · indexing…`
+            : status.label}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-72 text-[11px] leading-relaxed">
-        {status.state === "running" && "Language server connected."}
+        {status.state === "indexing" &&
+          "Indexing the project — completions and other language features may be incomplete until this finishes."}
+        {status.state === "running" && "Language server ready."}
         {status.state === "missing" &&
           (status.hint
             ? `No language server found. Install with: ${status.hint}`

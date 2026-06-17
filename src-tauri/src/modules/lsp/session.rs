@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -12,6 +14,9 @@ const READ_BUF: usize = 64 * 1024;
 pub struct LspSession {
     child: Arc<SharedChild>,
     stdin: Mutex<ChildStdin>,
+    // Set before a deliberate kill (lsp_stop / idle shutdown / drop) so the
+    // waiter thread can tell an intentional stop apart from an unexpected exit.
+    stopping: Arc<AtomicBool>,
     // Closing the Job handle on drop kills the server's descendants if the
     // Terax process dies without a clean lsp_stop (same rationale as pty).
     #[cfg(windows)]
@@ -30,12 +35,14 @@ impl LspSession {
     }
 
     pub fn kill(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         let _ = self.child.kill();
     }
 }
 
 impl Drop for LspSession {
     fn drop(&mut self) {
+        self.stopping.store(true, Ordering::SeqCst);
         let _ = self.child.kill();
     }
 }
@@ -113,18 +120,36 @@ pub fn spawn(
         })
         .map_err(|e| e.to_string())?;
 
-    if let Some(stderr) = stderr {
-        thread::Builder::new()
-            .name("terax-lsp-stderr".into())
-            .spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    log::debug!("lsp stderr: {line}");
-                }
-            })
-            .map_err(|e| e.to_string())?;
-    }
+    // Keep a bounded tail of the server's stderr so an abnormal exit can be
+    // diagnosed (e.g. jdtls failing to start) without flooding the log with
+    // every startup line.
+    const STDERR_TAIL_LINES: usize = 40;
+    let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let stderr_handle = match stderr {
+        Some(stderr) => {
+            let tail = stderr_tail.clone();
+            let handle = thread::Builder::new()
+                .name("terax-lsp-stderr".into())
+                .spawn(move || {
+                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                        log::debug!("lsp stderr: {line}");
+                        let mut tail = tail.lock().unwrap_or_else(|p| p.into_inner());
+                        if tail.len() == STDERR_TAIL_LINES {
+                            tail.pop_front();
+                        }
+                        tail.push_back(line);
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+            Some(handle)
+        }
+        None => None,
+    };
 
+    let stopping = Arc::new(AtomicBool::new(false));
     let waiter_child = child.clone();
+    let waiter_tail = stderr_tail;
+    let waiter_stopping = stopping.clone();
     thread::Builder::new()
         .name("terax-lsp-waiter".into())
         .spawn(move || {
@@ -135,6 +160,28 @@ pub fn spawn(
                     -1
                 }
             };
+            // Drain remaining stderr before reading the tail so it reflects the
+            // crash, not a partially-read buffer.
+            if let Some(handle) = stderr_handle {
+                let _ = handle.join();
+            }
+            // Only surface a warning for *unexpected* exits. A deliberate stop
+            // (lsp_stop / idle shutdown / drop) kills with a signal (code -1)
+            // and is normal, so it logs at debug instead.
+            if waiter_stopping.load(Ordering::SeqCst) {
+                log::debug!("lsp server stopped (code={code})");
+            } else {
+                let tail = waiter_tail.lock().unwrap_or_else(|p| p.into_inner());
+                if tail.is_empty() {
+                    log::warn!("lsp server exited unexpectedly code={code} (no stderr captured)");
+                } else {
+                    let joined: Vec<&str> = tail.iter().map(String::as_str).collect();
+                    log::warn!(
+                        "lsp server exited unexpectedly code={code}; recent stderr:\n{}",
+                        joined.join("\n")
+                    );
+                }
+            }
             on_exit(code);
         })
         .map_err(|e| e.to_string())?;
@@ -142,6 +189,7 @@ pub fn spawn(
     Ok(Arc::new(LspSession {
         child,
         stdin: Mutex::new(stdin),
+        stopping,
         #[cfg(windows)]
         _job: job,
     }))

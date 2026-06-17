@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type LspPaneStatus = {
-  state: "running" | "missing" | "error";
+  state: "indexing" | "running" | "missing" | "error";
   label: string;
   hint: string | null;
 };

@@ -287,6 +287,14 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
               hint: message,
             });
           },
+          onReady: () => {
+            if (cancelled || myGen !== generation) return;
+            useLspStatusStore.getState().setStatus(path, {
+              state: "running",
+              label: lspDisplayLabelRef.current ?? "",
+              hint: null,
+            });
+          },
         });
         if (cancelled || myGen !== generation) {
           if (result.kind === "ready") result.handle.release();
@@ -299,7 +307,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
           lspReleaseRef.current = result.handle.release;
           lspDisplayLabelRef.current = result.handle.status.display;
           useLspStatusStore.getState().setStatus(path, {
-            state: "running",
+            state: "indexing",
             label: result.handle.status.display,
             hint: null,
           });

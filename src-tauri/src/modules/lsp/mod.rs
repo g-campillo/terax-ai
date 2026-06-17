@@ -134,6 +134,7 @@ pub fn lsp_start(
     let envs = jdk_env(def)?;
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
     let ev_msg = on_event.clone();
+    let exit_lang = language.clone();
     let args: Vec<String> = def.args.iter().map(|s| s.to_string()).collect();
     let session = session::spawn(
         &bin.to_string_lossy(),
@@ -141,9 +142,20 @@ pub fn lsp_start(
         &canonical.to_string_lossy(),
         &envs,
         move |msg| {
+            // TEMP debug: trace completion responses (remove after diagnosing).
+            if msg.contains("\"isIncomplete\"")
+                || (msg.contains("\"result\"") && msg.contains("\"label\""))
+            {
+                let approx_items = msg.matches("\"label\"").count();
+                log::info!(
+                    "lsp recv completion-like response: ~{approx_items} items, {} bytes",
+                    msg.len()
+                );
+            }
             let _ = ev_msg.send(LspEvent::Message { data: msg });
         },
         move |code| {
+            log::debug!("lsp exited id={id} language={exit_lang} code={code}");
             let _ = on_event.send(LspEvent::Exited { code });
         },
     )?;
@@ -158,6 +170,10 @@ pub fn lsp_send(
     id: u32,
     message: String,
 ) -> Result<(), String> {
+    // TEMP debug: trace outgoing completion requests (remove after diagnosing).
+    if message.contains("\"textDocument/completion\"") {
+        log::info!("lsp_send id={id} textDocument/completion ({} bytes)", message.len());
+    }
     let session = state
         .sessions
         .read()
