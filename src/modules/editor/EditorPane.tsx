@@ -1,6 +1,4 @@
-import { getKey } from "@/modules/ai/lib/keyring";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { onKeysChanged } from "@/modules/settings/store";
 import { redo, undo } from "@codemirror/commands";
 import {
   findNext,
@@ -11,6 +9,7 @@ import {
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { vim } from "@replit/codemirror-vim";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
   forwardRef,
@@ -20,8 +19,6 @@ import {
   useMemo,
   useRef,
 } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { inlineCompletion } from "./lib/autocomplete/inlineExtension";
 import {
   buildSharedExtensions,
   languageCompartment,
@@ -81,40 +78,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     const cmRef = useRef<ReactCodeMirrorRef>(null);
     const editorThemeId = usePreferencesStore((s) => s.editorTheme);
     const vimMode = usePreferencesStore((s) => s.vimMode);
-    const languageRef = useRef<string | null>(null);
-    const apiKeyRef = useRef<string | null>(null);
-
-    useEffect(() => {
-      let cancelled = false;
-      const refresh = async () => {
-        const provider = usePreferencesStore.getState().autocompleteProvider;
-        if (
-          provider === "lmstudio" ||
-          provider === "mlx" ||
-          provider === "ollama"
-        ) {
-          apiKeyRef.current = null;
-          return;
-        }
-        const k = await getKey(provider);
-        if (!cancelled) apiKeyRef.current = k;
-      };
-      void refresh();
-      let unlistenKeys: (() => void) | undefined;
-      void onKeysChanged(() => void refresh()).then((un) => {
-        unlistenKeys = un;
-      });
-      const unsubPrefs = usePreferencesStore.subscribe((state, prev) => {
-        if (state.autocompleteProvider !== prev.autocompleteProvider) {
-          void refresh();
-        }
-      });
-      return () => {
-        cancelled = true;
-        unlistenKeys?.();
-        unsubPrefs();
-      };
-    }, []);
     const themeExt =
       EDITOR_THEME_EXT[editorThemeId] ?? EDITOR_THEME_EXT.atomone;
 
@@ -127,6 +90,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     onSavedRef.current = onSaved;
     const onCloseRef = useRef(onClose);
     onCloseRef.current = onClose;
+    // Save path that optionally runs LSP formatting first (assigned below, once
+    // lspFormatRef exists). The save keymaps call through this ref.
+    const saveWithFormatRef = useRef<() => Promise<void>>(() =>
+      Promise.resolve(),
+    );
 
     const pathRef = useRef(path);
     pathRef.current = path;
@@ -163,7 +131,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         vimHandlersExtension(() => ({
           save: () => {
             void (async () => {
-              await saveRef.current();
+              await saveWithFormatRef.current();
               onSavedRef.current?.();
             })();
           },
@@ -172,45 +140,24 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         ...buildSharedExtensions(),
         languageCompartment.of([]),
         lspCompartment.of([]),
-        inlineCompletion({
-          getPrefs: () => {
-            const s = usePreferencesStore.getState();
-            const p = s.autocompleteProvider;
-            const modelId =
-              p === "lmstudio"
-                ? s.lmstudioModelId
-                : p === "mlx"
-                  ? s.mlxModelId
-                  : p === "ollama"
-                    ? s.ollamaModelId
-                    : p === "openai-compatible"
-                      ? s.openaiCompatibleModelId
-                      : p === "openrouter"
-                        ? s.openrouterModelId
-                        : s.autocompleteModelId;
-            return {
-              enabled: s.autocompleteEnabled,
-              provider: p,
-              modelId,
-              apiKey: apiKeyRef.current,
-              lmstudioBaseURL: s.lmstudioBaseURL,
-              mlxBaseURL: s.mlxBaseURL,
-              ollamaBaseURL: s.ollamaBaseURL,
-              openaiCompatibleBaseURL: s.openaiCompatibleBaseURL,
-            };
-          },
-          getPath: () => pathRef.current,
-          getLanguage: () => languageRef.current,
-        }),
         keymap.of([
           {
             key: "Mod-s",
             preventDefault: true,
             run: () => {
               void (async () => {
-                await saveRef.current();
+                await saveWithFormatRef.current();
                 onSavedRef.current?.();
               })();
+              return true;
+            },
+          },
+          {
+            // Format the document via the language server (VS Code's shortcut).
+            key: "Shift-Alt-f",
+            preventDefault: true,
+            run: (view) => {
+              void lspFormatRef.current?.(view);
               return true;
             },
           },
@@ -228,8 +175,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     }, [vimMode]);
 
     useEffect(() => {
-      const ext = path.split(".").pop()?.toLowerCase() ?? null;
-      languageRef.current = ext;
       if (doc.status !== "ready") return;
       let cancelled = false;
       const resolve = async (): Promise<Extension> => {
@@ -260,6 +205,27 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
       onOpenFileAtRef.current = onOpenFileAt;
     }, [onOpenFileAt]);
     const lspReleaseRef = useRef<(() => void) | null>(null);
+    // Set when a ready LSP handle is installed; the format command and
+    // format-on-save call through it, and it's cleared when the server goes away.
+    const lspFormatRef = useRef<
+      ((view: EditorView) => Promise<boolean>) | null
+    >(null);
+    saveWithFormatRef.current = async () => {
+      const view = cmRef.current?.view;
+      if (
+        usePreferencesStore.getState().formatOnSave &&
+        view &&
+        lspFormatRef.current
+      ) {
+        // A formatter that fails or has nothing to do must not block the save.
+        try {
+          await lspFormatRef.current(view);
+        } catch {
+          // ignore — fall through to the plain save
+        }
+      }
+      await saveRef.current();
+    };
     // Holds the display label once a ready handle is installed; the onServerError
     // closure reads it so it always uses the most recent label without re-creating
     // the callback on every render.
@@ -276,6 +242,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         const myGen = ++generation;
         const { resolveLspExtension } = await import("./lib/lsp/extension");
         const { useLspStatusStore } = await import("./lib/lsp/statusStore");
+        // Let the status pill re-resolve this pane's server on demand (an
+        // errored entry self-heals on the next acquire).
+        useLspStatusStore.getState().setRestarter(path, () => void apply());
         const result = await resolveLspExtension({
           path,
           workspaceRoot,
@@ -302,9 +271,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         }
         lspReleaseRef.current?.();
         lspReleaseRef.current = null;
+        lspFormatRef.current = null;
         const view = cmRef.current?.view;
         if (result.kind === "ready") {
           lspReleaseRef.current = result.handle.release;
+          lspFormatRef.current = result.handle.format;
           lspDisplayLabelRef.current = result.handle.status.display;
           useLspStatusStore.getState().setStatus(path, {
             state: "indexing",
@@ -330,13 +301,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
       };
       void apply();
 
-      // Ghost-text autocomplete and the LSP popup are mutually exclusive, and
-      // the master toggle can flip at runtime: rebuild on either change.
+      // The LSP master toggle can flip at runtime: rebuild on change.
       const unsub = usePreferencesStore.subscribe((state, prev) => {
-        if (
-          state.autocompleteEnabled !== prev.autocompleteEnabled ||
-          state.lspEnabled !== prev.lspEnabled
-        ) {
+        if (state.lspEnabled !== prev.lspEnabled) {
           void apply();
         }
       });
@@ -346,9 +313,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         unsub();
         lspReleaseRef.current?.();
         lspReleaseRef.current = null;
-        void import("./lib/lsp/statusStore").then(({ useLspStatusStore }) =>
-          useLspStatusStore.getState().clearStatus(path),
-        );
+        lspFormatRef.current = null;
+        void import("./lib/lsp/statusStore").then(({ useLspStatusStore }) => {
+          useLspStatusStore.getState().clearStatus(path);
+          useLspStatusStore.getState().clearRestarter(path);
+        });
       };
     }, [path, doc.status, workspaceRoot]);
 
@@ -424,7 +393,15 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     }
     if (doc.status === "binary" || doc.status === "toolarge") {
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
-      const isImage = ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext);
+      const isImage = [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "svg",
+        "ico",
+      ].includes(ext);
       const isVideo = ["mp4", "webm", "ogg", "mov"].includes(ext);
       const isAudio = ["mp3", "wav", "flac", "aac", "m4a"].includes(ext);
       const isPdf = ext === "pdf";
@@ -440,10 +417,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
                 decoding="async"
                 className="max-w-full max-h-full object-contain rounded-md border border-border shadow-sm"
                 style={{
-                  backgroundImage: 'conic-gradient(#e5e7eb 0.25turn, #f3f4f6 0.25turn 0.5turn, #e5e7eb 0.5turn 0.75turn, #f3f4f6 0.75turn)',
-                  backgroundSize: '20px 20px',
+                  backgroundImage:
+                    "conic-gradient(#e5e7eb 0.25turn, #f3f4f6 0.25turn 0.5turn, #e5e7eb 0.5turn 0.75turn, #f3f4f6 0.75turn)",
+                  backgroundSize: "20px 20px",
                 }}
-                alt={path.split('/').pop()}
+                alt={path.split("/").pop()}
               />
             )}
             {isVideo && (
@@ -468,7 +446,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
               <iframe
                 src={assetUrl}
                 className="w-full h-full border-none"
-                title={path.split('/').pop()}
+                title={path.split("/").pop()}
               />
             )}
           </div>

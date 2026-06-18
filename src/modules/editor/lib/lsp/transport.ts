@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   getNotifications,
   type IBatchRequest,
@@ -6,6 +6,8 @@ import {
   type JSONRPCRequestData,
 } from "@open-rpc/client-js/build/Request";
 import { Transport } from "@open-rpc/client-js/build/transports/Transport";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { lspConfigForSection } from "./serverConfig";
 
 export type LspEvent =
   | { type: "message"; data: string }
@@ -78,9 +80,14 @@ export class TauriLspTransport extends Transport {
         this.options.onExit?.(ev.code);
       }
     };
+    const override =
+      usePreferencesStore.getState().lspServerOverrides?.[
+        this.options.language
+      ];
     this.sessionId = await invoke<number>("lsp_start", {
       language: this.options.language,
       workspaceRoot: this.options.workspaceRoot,
+      serverOverride: override?.command ? override : null,
       onEvent,
     });
   }
@@ -133,7 +140,9 @@ export class TauriLspTransport extends Transport {
     if (this.sessionId == null) return;
     const result =
       req.method === "workspace/configuration"
-        ? configurationItems(req.params).map(() => null)
+        ? configurationItems(req.params).map((item) =>
+            lspConfigForSection((item as { section?: string } | null)?.section),
+          )
         : null;
     try {
       await invoke("lsp_send", {

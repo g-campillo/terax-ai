@@ -1,12 +1,43 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import type { CompletionContext } from "@codemirror/autocomplete";
-import { invoke } from "@tauri-apps/api/core";
 import type { Extension } from "@codemirror/state";
+import { type EditorView, ViewPlugin } from "@codemirror/view";
 import { languageServerWithClient } from "@marimo-team/codemirror-languageserver";
-import { warn as logWarn } from "@tauri-apps/plugin-log";
+import { invoke } from "@tauri-apps/api/core";
 import { acquireLspClient, onLspClientError, releaseLspClient } from "./client";
+import { formatDocument } from "./format";
 import { lspLanguageFor } from "./languages";
+import { renderLspMarkdown } from "./markdownRenderer";
 import { fileUriToPath, pathToFileUri } from "./uri";
+
+// renderLspMarkdown rewrites the servers' "Source:" file:// links into inert
+// `.cm-lsp-file-link` markers; this view plugin turns a click on one into an
+// in-editor navigation instead of a (blocked) file:// browser navigation.
+function fileLinkClickHandler(
+  onOpenFileAt: (path: string, line: number) => void,
+): Extension {
+  return ViewPlugin.define((view) => {
+    const onClick = (e: MouseEvent) => {
+      const link = (e.target as HTMLElement | null)?.closest?.(
+        ".cm-lsp-file-link",
+      );
+      const uri = link?.getAttribute("data-file-uri");
+      if (!uri) return;
+      e.preventDefault();
+      const [base, fragment] = uri.split("#");
+      const line = fragment ? Number.parseInt(fragment, 10) : Number.NaN;
+      onOpenFileAt(
+        fileUriToPath(base),
+        Number.isFinite(line) && line > 0 ? line : 1,
+      );
+    };
+    view.dom.addEventListener("click", onClick);
+    return {
+      destroy() {
+        view.dom.removeEventListener("click", onClick);
+      },
+    };
+  });
+}
 
 // If a server never sends a clear readiness signal, flip the "indexing"
 // indicator to ready after this long so the pill can't appear stuck forever.
@@ -23,6 +54,8 @@ export type LspServerStatus = {
 export type LspHandle = {
   extension: Extension;
   status: LspServerStatus;
+  /** Format the document via the server; resolves false if it can't / won't. */
+  format: (view: EditorView) => Promise<boolean>;
   release: () => void;
 };
 
@@ -53,8 +86,11 @@ export async function resolveLspExtension({
   if (!lang) return { kind: "unsupported" };
   const prefs = usePreferencesStore.getState();
   if (!prefs.lspEnabled) return { kind: "disabled" };
+  const override = prefs.lspServerOverrides?.[lang.server];
   const status = await invoke<LspServerStatus>("lsp_status", {
     language: lang.server,
+    workspaceRoot,
+    serverOverride: override?.command ? override : null,
   });
   if (!status.available) return { kind: "missing-server", status };
 
@@ -103,30 +139,18 @@ export async function resolveLspExtension({
     client,
     documentUri: pathToFileUri(path),
     languageId: lang.languageId,
-    // AI ghost text is being removed; LSP completion is always on.
+    // Render hover / completion / signature docs as sanitized HTML so markdown
+    // shows formatted instead of raw (marimo only invokes the renderer here).
+    allowHTMLContent: true,
+    markdownRenderer: renderLspMarkdown,
+    // LSP completion is the editor's only completer.
     completionEnabled: true,
-    // TEMP debug: marimo appends this source after its own, so it runs on every
-    // completion query and records the guard state to Terax.log (remove later).
-    completionConfig: {
-      override: [
-        (ctx: CompletionContext) => {
-          const c = client as unknown as {
-            ready?: boolean;
-            capabilities?: { completionProvider?: unknown };
-          };
-          void logWarn(
-            `[lsp-debug] ${lang.languageId} explicit=${ctx.explicit} ready=${c.ready} hasCaps=${!!c.capabilities} completionProvider=${!!c.capabilities?.completionProvider} before=${JSON.stringify(ctx.state.sliceDoc(Math.max(0, ctx.pos - 12), ctx.pos))}`,
-          );
-          return null;
-        },
-      ],
-    },
     hoverEnabled: true,
     diagnosticsEnabled: true,
     definitionEnabled: true,
     renameEnabled: false,
-    codeActionsEnabled: false,
-    signatureHelpEnabled: false,
+    codeActionsEnabled: true,
+    signatureHelpEnabled: true,
     onGoToDefinition: (result) => {
       const target = fileUriToPath(result.uri);
       if (target !== path) {
@@ -137,8 +161,9 @@ export async function resolveLspExtension({
   return {
     kind: "ready",
     handle: {
-      extension,
+      extension: [extension, fileLinkClickHandler(onOpenFileAt)],
       status,
+      format: (view: EditorView) => formatDocument(client, view, path),
       release: () => {
         if (released) return;
         released = true;

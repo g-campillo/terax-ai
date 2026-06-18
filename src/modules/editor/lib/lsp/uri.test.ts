@@ -3,7 +3,9 @@ import { fileUriToPath, pathToFileUri } from "./uri";
 
 describe("pathToFileUri", () => {
   it("converts unix paths", () => {
-    expect(pathToFileUri("/Users/g/proj/a.ts")).toBe("file:///Users/g/proj/a.ts");
+    expect(pathToFileUri("/Users/g/proj/a.ts")).toBe(
+      "file:///Users/g/proj/a.ts",
+    );
   });
   it("converts windows drive paths in canonical forward-slash form", () => {
     expect(pathToFileUri("C:/Users/g/a.ts")).toBe("file:///C:/Users/g/a.ts");
@@ -24,7 +26,9 @@ describe("pathToFileUri", () => {
 
 describe("fileUriToPath", () => {
   it("round-trips unix paths", () => {
-    expect(fileUriToPath("file:///Users/g/proj/a.ts")).toBe("/Users/g/proj/a.ts");
+    expect(fileUriToPath("file:///Users/g/proj/a.ts")).toBe(
+      "/Users/g/proj/a.ts",
+    );
   });
   it("strips the leading slash from windows drive paths", () => {
     expect(fileUriToPath("file:///C:/Users/g/a.ts")).toBe("C:/Users/g/a.ts");

@@ -20,7 +20,12 @@ vi.mock("./transport", () => ({
   },
 }));
 
-import { acquireLspClient, releaseLspClient, onLspClientError, __resetLspClientsForTest } from "./client";
+import {
+  __resetLspClientsForTest,
+  acquireLspClient,
+  onLspClientError,
+  releaseLspClient,
+} from "./client";
 
 // Returns the onExit options from the most-recently constructed transport so
 // tests can trigger crash callbacks without duplicating the cast.
@@ -126,6 +131,28 @@ describe("lsp client cache", () => {
     expect(clientCtor).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(1);
     expect(clientCtor).toHaveBeenCalledTimes(3);
+    releaseLspClient("go", "/repo");
+  });
+
+  it("resets the restart budget after a server stays up", () => {
+    acquireLspClient("go", "/repo");
+    expect(clientCtor).toHaveBeenCalledTimes(1);
+    // First crash → one restart (ctor 2), which then survives the stable window.
+    lastTransportOpts().onExit?.(1);
+    vi.runOnlyPendingTimers();
+    expect(clientCtor).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(60_000); // stable uptime elapses → budget resets to 0
+    // The refreshed budget allows three more restarts (ctor 3, 4, 5).
+    for (let i = 0; i < 3; i++) {
+      lastTransportOpts().onExit?.(1);
+      vi.runOnlyPendingTimers();
+    }
+    expect(clientCtor).toHaveBeenCalledTimes(5);
+    // The fourth post-reset crash exhausts the refreshed budget.
+    const onError = vi.fn();
+    onLspClientError("go", "/repo", onError);
+    lastTransportOpts().onExit?.(1);
+    expect(onError).toHaveBeenCalledTimes(1);
     releaseLspClient("go", "/repo");
   });
 

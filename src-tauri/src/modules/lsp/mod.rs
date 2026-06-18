@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
 use crate::modules::workspace::WorkspaceRegistry;
@@ -44,6 +44,15 @@ pub struct LspServerStatus {
     pub available: bool,
     pub command: Option<String>,
     pub install_hint: String,
+}
+
+/// A user-supplied server binary that bypasses discovery for a language.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerOverride {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// Compute the reported status from a server's resolved binary and JDK. A
@@ -103,10 +112,31 @@ fn jdk_env(def: &registry::ServerDef) -> Result<Vec<(String, String)>, String> {
 }
 
 #[tauri::command]
-pub fn lsp_status(language: String) -> Result<LspServerStatus, String> {
+pub fn lsp_status(
+    language: String,
+    workspace_root: Option<String>,
+    server_override: Option<ServerOverride>,
+) -> Result<LspServerStatus, String> {
     let def = registry::server_by_id(&language)
         .ok_or_else(|| format!("unknown lsp language: {language}"))?;
-    let binary = registry::resolve_binary(def);
+    // A configured override binary short-circuits discovery; it's available iff
+    // the path is runnable.
+    if let Some(ov) = server_override {
+        let runnable = registry::is_runnable(std::path::Path::new(&ov.command));
+        return Ok(LspServerStatus {
+            language: def.id.to_string(),
+            display: def.display.to_string(),
+            available: runnable,
+            command: runnable.then(|| ov.command.clone()),
+            install_hint: if runnable {
+                def.install_hint.to_string()
+            } else {
+                format!("configured server path is not executable: {}", ov.command)
+            },
+        });
+    }
+    let root = workspace_root.as_deref().map(std::path::Path::new);
+    let binary = registry::resolve_binary(def, root);
     let jdk = def.min_java.and_then(registry::resolve_jdk);
     Ok(build_status(def, binary, jdk))
 }
@@ -117,6 +147,7 @@ pub fn lsp_start(
     registry_state: tauri::State<'_, WorkspaceRegistry>,
     language: String,
     workspace_root: String,
+    server_override: Option<ServerOverride>,
     on_event: Channel<LspEvent>,
 ) -> Result<u32, String> {
     let canonical = std::fs::canonicalize(&workspace_root)
@@ -129,29 +160,36 @@ pub fn lsp_start(
     }
     let def = registry::server_by_id(&language)
         .ok_or_else(|| format!("unknown lsp language: {language}"))?;
-    let bin = registry::resolve_binary(def)
-        .ok_or_else(|| format!("no server installed for {language}: {}", def.install_hint))?;
+    // A configured override binary bypasses discovery and supplies its own args;
+    // otherwise resolve from the workspace-aware search path.
+    let (bin, args): (PathBuf, Vec<String>) = match server_override {
+        Some(ov) => {
+            if !registry::is_runnable(std::path::Path::new(&ov.command)) {
+                return Err(format!(
+                    "lsp_start: configured server path is not executable: {}",
+                    ov.command
+                ));
+            }
+            (PathBuf::from(ov.command), ov.args)
+        }
+        None => {
+            let b = registry::resolve_binary(def, Some(canonical.as_path()))
+                .ok_or_else(|| {
+                    format!("no server installed for {language}: {}", def.install_hint)
+                })?;
+            (b, def.args.iter().map(|s| s.to_string()).collect())
+        }
+    };
     let envs = jdk_env(def)?;
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
     let ev_msg = on_event.clone();
     let exit_lang = language.clone();
-    let args: Vec<String> = def.args.iter().map(|s| s.to_string()).collect();
     let session = session::spawn(
         &bin.to_string_lossy(),
         &args,
         &canonical.to_string_lossy(),
         &envs,
         move |msg| {
-            // TEMP debug: trace completion responses (remove after diagnosing).
-            if msg.contains("\"isIncomplete\"")
-                || (msg.contains("\"result\"") && msg.contains("\"label\""))
-            {
-                let approx_items = msg.matches("\"label\"").count();
-                log::info!(
-                    "lsp recv completion-like response: ~{approx_items} items, {} bytes",
-                    msg.len()
-                );
-            }
             let _ = ev_msg.send(LspEvent::Message { data: msg });
         },
         move |code| {
@@ -170,10 +208,6 @@ pub fn lsp_send(
     id: u32,
     message: String,
 ) -> Result<(), String> {
-    // TEMP debug: trace outgoing completion requests (remove after diagnosing).
-    if message.contains("\"textDocument/completion\"") {
-        log::info!("lsp_send id={id} textDocument/completion ({} bytes)", message.len());
-    }
     let session = state
         .sessions
         .read()

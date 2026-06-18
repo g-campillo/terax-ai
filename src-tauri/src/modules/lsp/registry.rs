@@ -98,6 +98,17 @@ fn candidate_dirs() -> Vec<PathBuf> {
         for extra in [".cargo/bin", "go/bin", ".local/bin"] {
             out.push(home.join(extra));
         }
+        // Version managers install servers outside the GUI app's inherited PATH.
+        out.push(home.join(".volta/bin"));
+        out.push(home.join(".asdf/shims"));
+        out.push(home.join(".pyenv/shims"));
+        // nvm and pyenv keep one bin dir per installed version.
+        if let Ok(entries) = std::fs::read_dir(home.join(".nvm/versions/node")) {
+            out.extend(entries.flatten().map(|e| e.path().join("bin")));
+        }
+        if let Ok(entries) = std::fs::read_dir(home.join(".pyenv/versions")) {
+            out.extend(entries.flatten().map(|e| e.path().join("bin")));
+        }
     }
     #[cfg(target_os = "macos")]
     {
@@ -105,6 +116,23 @@ fn candidate_dirs() -> Vec<PathBuf> {
         out.push(PathBuf::from("/usr/local/bin"));
     }
     out
+}
+
+/// Project-local toolchain dirs, probed ahead of global PATH so a server pinned
+/// to the workspace (a project's TypeScript, a server installed in a venv) wins.
+fn project_local_dirs(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = vec![root.join("node_modules").join(".bin")];
+    for venv in [".venv", "venv", "env"] {
+        out.push(root.join(venv).join("bin")); // unix venv
+        out.push(root.join(venv).join("Scripts")); // windows venv
+    }
+    out
+}
+
+/// Whether a path is a runnable binary. Public so the override path in `lsp_*`
+/// commands can validate a user-supplied server command.
+pub fn is_runnable(p: &std::path::Path) -> bool {
+    is_executable(p)
 }
 
 #[cfg(unix)]
@@ -138,7 +166,10 @@ pub fn find_binary_in(names: &[&str], dirs: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-pub fn resolve_binary(def: &ServerDef) -> Option<PathBuf> {
+pub fn resolve_binary(
+    def: &ServerDef,
+    workspace_root: Option<&std::path::Path>,
+) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     if def.id == "swift" {
         if let Ok(out) = std::process::Command::new("xcrun")
@@ -153,7 +184,10 @@ pub fn resolve_binary(def: &ServerDef) -> Option<PathBuf> {
             }
         }
     }
-    find_binary_in(def.binaries, &candidate_dirs())
+    // Project-local dirs take priority over the global toolchain.
+    let mut dirs = workspace_root.map(project_local_dirs).unwrap_or_default();
+    dirs.extend(candidate_dirs());
+    find_binary_in(def.binaries, &dirs)
 }
 
 /// Parse the major Java version from `java -version` output (the first quoted
@@ -325,6 +359,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("fake-ls"), b"").unwrap();
         assert!(find_binary_in(&["fake-ls"], &[dir.path().to_path_buf()]).is_none());
+    }
+
+    #[test]
+    fn project_local_dirs_lead_with_node_modules_then_venvs() {
+        let dirs = project_local_dirs(std::path::Path::new("/repo"));
+        assert_eq!(dirs[0], PathBuf::from("/repo/node_modules/.bin"));
+        assert!(dirs.contains(&PathBuf::from("/repo/.venv/bin")));
+        assert!(dirs.contains(&PathBuf::from("/repo/venv/bin")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_runnable_tracks_executable_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server");
+        std::fs::write(&path, b"").unwrap();
+        assert!(!is_runnable(&path));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_runnable(&path));
     }
 
     #[test]

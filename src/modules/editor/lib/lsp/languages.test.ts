@@ -3,10 +3,22 @@ import { lspLanguageFor } from "./languages";
 
 describe("lspLanguageFor", () => {
   it("maps the typescript family with react variants", () => {
-    expect(lspLanguageFor("/r/a.ts")).toEqual({ server: "typescript", languageId: "typescript" });
-    expect(lspLanguageFor("/r/a.tsx")).toEqual({ server: "typescript", languageId: "typescriptreact" });
-    expect(lspLanguageFor("/r/a.js")).toEqual({ server: "typescript", languageId: "javascript" });
-    expect(lspLanguageFor("/r/a.jsx")).toEqual({ server: "typescript", languageId: "javascriptreact" });
+    expect(lspLanguageFor("/r/a.ts")).toEqual({
+      server: "typescript",
+      languageId: "typescript",
+    });
+    expect(lspLanguageFor("/r/a.tsx")).toEqual({
+      server: "typescript",
+      languageId: "typescriptreact",
+    });
+    expect(lspLanguageFor("/r/a.js")).toEqual({
+      server: "typescript",
+      languageId: "javascript",
+    });
+    expect(lspLanguageFor("/r/a.jsx")).toEqual({
+      server: "typescript",
+      languageId: "javascriptreact",
+    });
   });
 
   it("maps the remaining launch languages", () => {

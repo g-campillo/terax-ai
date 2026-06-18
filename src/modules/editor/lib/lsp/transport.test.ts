@@ -22,7 +22,10 @@ describe("TauriLspTransport", () => {
 
   it("starts a session on connect with language and root", async () => {
     invokeMock.mockResolvedValueOnce(7);
-    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
     await t.connect();
     expect(invokeMock).toHaveBeenCalledWith(
       "lsp_start",
@@ -36,18 +39,26 @@ describe("TauriLspTransport", () => {
 
   it("sends serialized payloads through lsp_send with the session id", async () => {
     invokeMock.mockResolvedValue(7);
-    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
     await t.connect();
     invokeMock.mockClear();
     invokeMock.mockResolvedValue(undefined);
     void t.sendData(
-      { request: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} } } as never,
+      {
+        request: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      } as never,
       1000,
     );
     await vi.waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
         "lsp_send",
-        expect.objectContaining({ id: 7, message: expect.stringContaining('"initialize"') }),
+        expect.objectContaining({
+          id: 7,
+          message: expect.stringContaining('"initialize"'),
+        }),
       );
     });
   });
@@ -67,7 +78,10 @@ describe("TauriLspTransport", () => {
 
   it("stops the session on close", async () => {
     invokeMock.mockResolvedValue(7);
-    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
     await t.connect();
     invokeMock.mockClear();
     t.close();
@@ -76,7 +90,10 @@ describe("TauriLspTransport", () => {
 
   it("resolves the sendData promise when the matching response arrives", async () => {
     invokeMock.mockResolvedValue(7);
-    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
     await t.connect();
     invokeMock.mockResolvedValue(undefined);
     // internalID must match the wire id so TransportRequestManager can correlate
@@ -98,7 +115,10 @@ describe("TauriLspTransport", () => {
 
   it("answers workspace/configuration server requests", async () => {
     invokeMock.mockResolvedValue(7);
-    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
     await t.connect();
     invokeMock.mockClear();
     invokeMock.mockResolvedValue(undefined);
@@ -116,7 +136,13 @@ describe("TauriLspTransport", () => {
         "lsp_send",
         expect.objectContaining({
           id: 7,
-          message: JSON.stringify({ jsonrpc: "2.0", id: 42, result: [null, null] }),
+          // Unknown sections resolve to {} (an object, not null) so servers
+          // expecting a config object still get one.
+          message: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 42,
+            result: [{}, {}],
+          }),
         }),
       );
     });
@@ -124,7 +150,10 @@ describe("TauriLspTransport", () => {
 
   it("rejects in-flight requests when the server exits", async () => {
     invokeMock.mockResolvedValue(7);
-    const t = new TauriLspTransport({ language: "typescript", workspaceRoot: "/repo" });
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
     await t.connect();
     invokeMock.mockResolvedValue(undefined);
     const reqData = {

@@ -5,6 +5,10 @@ import { pathToFileUri } from "./uri";
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
 const MAX_RESTARTS = 3;
 const RESTART_BASE_MS = 1000;
+// Once a (re)started server stays up this long it's considered healthy and its
+// restart budget resets — so an early one-off crash doesn't permanently count
+// against a server that later runs fine for hours.
+const STABLE_UPTIME_MS = 60_000;
 // Heavyweight servers (jdtls, sourcekit-lsp) routinely need far longer than the
 // marimo client's 10s default to answer the first completion or to finish
 // `initialize` while they index a project. Without a generous ceiling those
@@ -18,15 +22,33 @@ type Entry = {
   idleTimer: ReturnType<typeof setTimeout> | null;
   restarts: number;
   restartTimer: ReturnType<typeof setTimeout> | null;
+  // Fires after STABLE_UPTIME_MS of a live (re)started client to reset `restarts`.
+  stableTimer: ReturnType<typeof setTimeout> | null;
   errorListeners: Set<(message: string) => void>;
   errored: boolean;
 };
+
+// Start the stable-uptime timer for an entry's current client; resets the
+// restart budget if the server is still up when it fires.
+function armStableTimer(key: string, entry: Entry): void {
+  if (entry.stableTimer) clearTimeout(entry.stableTimer);
+  entry.stableTimer = setTimeout(() => {
+    const e = entries.get(key);
+    if (!e) return;
+    e.restarts = 0;
+    e.stableTimer = null;
+  }, STABLE_UPTIME_MS);
+}
 
 const entries = new Map<string, Entry>();
 
 const keyOf = (language: string, root: string) => `${language}\0${root}`;
 
-function buildClient(language: string, root: string, key: string): LanguageServerClient {
+function buildClient(
+  language: string,
+  root: string,
+  key: string,
+): LanguageServerClient {
   const rootUri = pathToFileUri(root);
   return new LanguageServerClient({
     transport: new TauriLspTransport({
@@ -36,6 +58,11 @@ function buildClient(language: string, root: string, key: string): LanguageServe
         const entry = entries.get(key);
         // Normal shutdown path: entry removed or no live refs.
         if (!entry || entry.refs <= 0) return;
+        // This client just died, so it never reached stable uptime.
+        if (entry.stableTimer) {
+          clearTimeout(entry.stableTimer);
+          entry.stableTimer = null;
+        }
         if (entry.restarts >= MAX_RESTARTS) {
           // Mark entry permanently dead so a later acquire can self-heal.
           entry.errored = true;
@@ -61,6 +88,8 @@ function buildClient(language: string, root: string, key: string): LanguageServe
             // Process is already gone; ignore close errors.
           }
           current.client = buildClient(language, root, key);
+          // If this replacement survives, clear the accumulated restart count.
+          armStableTimer(key, current);
         }, delay);
       },
     }),
@@ -90,6 +119,21 @@ function buildClient(language: string, root: string, key: string): LanguageServe
           ...defaults?.textDocument?.definition,
           dynamicRegistration: false,
         },
+        signatureHelp: {
+          ...defaults?.textDocument?.signatureHelp,
+          dynamicRegistration: false,
+        },
+        codeAction: {
+          ...defaults?.textDocument?.codeAction,
+          dynamicRegistration: false,
+        },
+        // textDocument/formatting is requested directly (see format.ts); it
+        // still has to register statically or jdtls / sourcekit-lsp won't
+        // advertise documentFormattingProvider in the initialize response.
+        formatting: {
+          ...defaults?.textDocument?.formatting,
+          dynamicRegistration: false,
+        },
       },
     }),
   });
@@ -114,6 +158,10 @@ export function acquireLspClient(
         clearTimeout(existing.restartTimer);
         existing.restartTimer = null;
       }
+      if (existing.stableTimer) {
+        clearTimeout(existing.stableTimer);
+        existing.stableTimer = null;
+      }
       const fresh = buildClient(language, root, key);
       entries.set(key, {
         client: fresh,
@@ -122,6 +170,7 @@ export function acquireLspClient(
         idleTimer: null,
         restarts: 0,
         restartTimer: null,
+        stableTimer: null,
         errorListeners: existing.errorListeners,
         errored: false,
       });
@@ -141,6 +190,7 @@ export function acquireLspClient(
     idleTimer: null,
     restarts: 0,
     restartTimer: null,
+    stableTimer: null,
     errorListeners: new Set(),
     errored: false,
   });
@@ -163,6 +213,10 @@ export function releaseLspClient(language: string, root: string): void {
     if (entry.restartTimer) {
       clearTimeout(entry.restartTimer);
       entry.restartTimer = null;
+    }
+    if (entry.stableTimer) {
+      clearTimeout(entry.stableTimer);
+      entry.stableTimer = null;
     }
     entry.client.close();
   }, IDLE_SHUTDOWN_MS);
@@ -191,6 +245,7 @@ export function __resetLspClientsForTest(): void {
   for (const entry of entries.values()) {
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     if (entry.restartTimer) clearTimeout(entry.restartTimer);
+    if (entry.stableTimer) clearTimeout(entry.stableTimer);
   }
   entries.clear();
 }

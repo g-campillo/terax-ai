@@ -1,3 +1,4 @@
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -5,7 +6,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -18,23 +18,25 @@ import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { ThemePref } from "@/modules/settings/store";
 import {
-  TERMINAL_FONT_SIZES,
-  TERMINAL_SCROLLBACK_PRESETS,
   setAgentNotifications,
   setAutostart,
   setEditorAutoSave,
   setEditorAutoSaveDelay,
+  setFormatOnSave,
+  setLspEnabled,
+  setLspServerOverrides,
   setRestoreWindowState,
   setShowHidden,
-  setTerminalFontFamily,
-  setTerminalLetterSpacing,
-  setTerminalFontSize,
   setTerminalCursorBlink,
+  setTerminalFontFamily,
+  setTerminalFontSize,
+  setTerminalLetterSpacing,
   setTerminalScrollback,
-  setLspEnabled,
   setTerminalWebglEnabled,
   setVimMode,
   setZoomLevel,
+  TERMINAL_FONT_SIZES,
+  TERMINAL_SCROLLBACK_PRESETS,
 } from "@/modules/settings/store";
 import { useTheme } from "@/modules/theme";
 import {
@@ -78,9 +80,7 @@ export function GeneralSection() {
   const terminalWebglEnabled = usePreferencesStore(
     (s) => s.terminalWebglEnabled,
   );
-  const terminalCursorBlink = usePreferencesStore(
-    (s) => s.terminalCursorBlink,
-  );
+  const terminalCursorBlink = usePreferencesStore((s) => s.terminalCursorBlink);
   const terminalFontFamily = usePreferencesStore((s) => s.terminalFontFamily);
   const terminalLetterSpacing = usePreferencesStore(
     (s) => s.terminalLetterSpacing,
@@ -89,6 +89,7 @@ export function GeneralSection() {
   const terminalScrollback = usePreferencesStore((s) => s.terminalScrollback);
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const lspEnabled = usePreferencesStore((s) => s.lspEnabled);
+  const formatOnSave = usePreferencesStore((s) => s.formatOnSave);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
 
   useEffect(() => {
@@ -118,10 +119,7 @@ export function GeneralSection() {
 
   return (
     <div className="flex flex-col gap-6">
-      <SectionHeader
-        title="General"
-        description="Mode, editor, and startup."
-      />
+      <SectionHeader title="General" description="Mode, editor, and startup." />
 
       <div className="flex flex-col gap-2">
         <Label>Appearance</Label>
@@ -182,6 +180,16 @@ export function GeneralSection() {
           />
         </SettingRow>
         <SettingRow
+          title="Format on save"
+          description="Run the language server's formatter when you save a file."
+        >
+          <Switch
+            checked={formatOnSave}
+            disabled={!lspEnabled}
+            onCheckedChange={(v) => void setFormatOnSave(v)}
+          />
+        </SettingRow>
+        <SettingRow
           title="Vim mode"
           description="Enable Vim keybindings in the code editor."
         >
@@ -205,6 +213,19 @@ export function GeneralSection() {
             onChange={(v) => void setEditorAutoSaveDelay(v)}
           />
         )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>Language servers</Label>
+        <p className="text-[11px] text-muted-foreground">
+          Leave blank to auto-detect. Override with a path and any args (e.g.
+          <span className="font-mono">
+            {" "}
+            /usr/local/bin/pyright-langserver --stdio
+          </span>
+          ).
+        </p>
+        <LspServerOverridesRows disabled={!lspEnabled} />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -236,15 +257,12 @@ export function GeneralSection() {
                       ⓘ
                     </span>
                   </TooltipTrigger>
-                  <TooltipContent
-                    side="top"
-                    className="max-w-65 text-[11px]"
-                  >
-                    xterm's WebGL renderer caches glyphs in a GPU texture
-                    atlas. On some macOS setups (especially with Nerd Fonts),
-                    the atlas corrupts and terminal text becomes unreadable.
-                    Turn this off as a fallback — performance dips slightly,
-                    but text renders correctly via the DOM renderer.
+                  <TooltipContent side="top" className="max-w-65 text-[11px]">
+                    xterm's WebGL renderer caches glyphs in a GPU texture atlas.
+                    On some macOS setups (especially with Nerd Fonts), the atlas
+                    corrupts and terminal text becomes unreadable. Turn this off
+                    as a fallback — performance dips slightly, but text renders
+                    correctly via the DOM renderer.
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -308,7 +326,11 @@ export function GeneralSection() {
             </SelectTrigger>
             <SelectContent>
               {TERMINAL_FONT_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)} className="text-[12px]">
+                <SelectItem
+                  key={size}
+                  value={String(size)}
+                  className="text-[12px]"
+                >
                   {size} px
                 </SelectItem>
               ))}
@@ -389,6 +411,57 @@ function Label({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Mirrors SERVERS in src-tauri/src/modules/lsp/registry.rs.
+const LSP_SERVERS: { id: string; label: string }[] = [
+  { id: "typescript", label: "TypeScript / JavaScript" },
+  { id: "python", label: "Python" },
+  { id: "rust", label: "Rust" },
+  { id: "go", label: "Go" },
+  { id: "java", label: "Java" },
+  { id: "swift", label: "Swift" },
+  { id: "kotlin", label: "Kotlin" },
+];
+
+function LspServerOverridesRows({ disabled }: { disabled: boolean }) {
+  const overrides = usePreferencesStore((s) => s.lspServerOverrides);
+
+  const save = (id: string, raw: string) => {
+    const trimmed = raw.trim();
+    const next = { ...usePreferencesStore.getState().lspServerOverrides };
+    if (!trimmed) {
+      delete next[id];
+    } else {
+      const [command, ...args] = trimmed.split(/\s+/);
+      next[id] = { command, args };
+    }
+    void setLspServerOverrides(next);
+  };
+
+  return (
+    <>
+      {LSP_SERVERS.map((srv) => {
+        const ov = overrides[srv.id];
+        const value = ov ? [ov.command, ...ov.args].join(" ") : "";
+        return (
+          <SettingRow key={srv.id} title={srv.label}>
+            <Input
+              // Remount when the stored value changes (e.g. on hydration) so the
+              // uncontrolled input shows the latest persisted override.
+              key={`${srv.id}:${value}`}
+              defaultValue={value}
+              disabled={disabled}
+              placeholder="default (auto-detected)"
+              spellCheck={false}
+              className="h-8 w-64 font-mono text-[11px]"
+              onBlur={(e) => save(srv.id, e.target.value)}
+            />
+          </SettingRow>
+        );
+      })}
+    </>
+  );
+}
+
 function AutoSaveDelayInput({
   value,
   onChange,
@@ -442,4 +515,3 @@ function AutoSaveDelayInput({
     </SettingRow>
   );
 }
-

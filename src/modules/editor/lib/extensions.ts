@@ -4,6 +4,7 @@ import { lintGutter } from "@codemirror/lint";
 import { search } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { lspTooltipTheme } from "./lsp/lspTheme";
 
 // Compartments allow runtime reconfiguration without rebuilding state.
 export const languageCompartment = new Compartment();
@@ -98,11 +99,13 @@ export function buildSharedExtensions(): Extension[] {
         border: "1px solid var(--border)",
         borderRadius: "6px",
       },
-      "&.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
-        backgroundColor:
-          "color-mix(in srgb, var(--foreground) 10%, transparent)",
-        color: "var(--popover-foreground)",
-      },
+      "&.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]":
+        {
+          backgroundColor:
+            "color-mix(in srgb, var(--foreground) 10%, transparent)",
+          color: "var(--popover-foreground)",
+        },
     }),
+    lspTooltipTheme,
   ];
 }
