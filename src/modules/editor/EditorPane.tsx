@@ -26,7 +26,7 @@ import {
   vimCompartment,
 } from "./lib/extensions";
 import { resolveLanguage } from "./lib/languageResolver";
-import { EDITOR_THEME_EXT } from "./lib/themes";
+import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { useDocument } from "./lib/useDocument";
 import { initVimGlobals, vimHandlersExtension } from "./lib/vim";
 
@@ -76,11 +76,8 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     const reloadRef = useRef(reload);
     reloadRef.current = reload;
     const cmRef = useRef<ReactCodeMirrorRef>(null);
-    const editorThemeId = usePreferencesStore((s) => s.editorTheme);
+    const themeExt = useEditorThemeExt();
     const vimMode = usePreferencesStore((s) => s.vimMode);
-    const themeExt =
-      EDITOR_THEME_EXT[editorThemeId] ?? EDITOR_THEME_EXT.atomone;
-
     // Stabilize save + onSaved via refs so the extensions array never changes
     // identity — a new identity makes @uiw/react-codemirror reconfigure the
     // whole state, wiping the language compartment.

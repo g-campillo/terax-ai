@@ -33,6 +33,7 @@ type Props = {
   onAiDiffReject: AiDiffStackProps["onReject"];
   onOpenCommitFile: GitHistoryStackProps["onOpenCommitFile"];
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
+  onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
 };
 
 /**
@@ -60,6 +61,7 @@ export function WorkspaceSurface({
   onAiDiffReject,
   onOpenCommitFile,
   onGitHistorySearchHandle,
+  onSetMarkdownView,
 }: Props) {
   const kind = activeTab?.kind;
   const isTerminalTab = kind === "terminal";
@@ -104,6 +106,7 @@ export function WorkspaceSurface({
           onCloseTab={onEditorCloseTab}
           workspaceRoot={editorWorkspaceRoot}
           onOpenFileAt={onEditorOpenFileAt}
+          onSetMarkdownView={onSetMarkdownView}
         />
       </div>
       <div
@@ -127,7 +130,11 @@ export function WorkspaceSurface({
         )}
         aria-hidden={!isMarkdownTab}
       >
-        <MarkdownStack tabs={tabs} activeId={activeId} />
+        <MarkdownStack
+          tabs={tabs}
+          activeId={activeId}
+          onSetMarkdownView={onSetMarkdownView}
+        />
       </div>
       <div
         className={cn(

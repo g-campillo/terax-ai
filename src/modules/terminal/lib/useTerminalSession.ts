@@ -13,6 +13,7 @@ import { DormantRing } from "./dormantRing";
 import {
   createShellIntegrationState,
   registerCwdHandler,
+  registerOsc52ClipboardHandler,
   registerPromptTracker,
 } from "./osc-handlers";
 import { openPty, type PtySession } from "./pty-bridge";
@@ -67,6 +68,7 @@ type Session = {
   snapshot: string | null;
   searchQuery: string | null;
   dormantRing: DormantRing;
+  pendingInput: string;
   hasSlot: boolean;
   blocks: boolean;
   blockMode: BlockMode;
@@ -77,6 +79,11 @@ type Session = {
   inputFocus: (() => void) | null;
   // Per-leaf unsent shell-input text; the single workspace bar swaps it on focus change.
   inputDraft: string;
+  // Live "input has text" flag from the block shell-input (gates the watermark).
+  inputActive: boolean;
+  // A command was submitted on this leaf; kills the watermark synchronously,
+  // before the shell's OSC 133 C round-trips through the PTY.
+  everSubmitted: boolean;
   // True if the slot was in alt-screen mode (TUI like vim, htop, dofek)
   // at the most recent release. Read once on the next bind to trigger a
   // SIGWINCH-driven repaint instead of replaying dormant bytes.
@@ -130,19 +137,36 @@ export function whenSessionReady(
   });
 }
 
+const PENDING_INPUT_MAX = 256 * 1024;
+
+// Input typed before the pty attaches is queued and flushed on attach. Cap the
+// queue so a large paste into a still-spawning pane can't grow it without bound.
+function queuePendingInput(s: Session, data: string): void {
+  if (s.pendingInput.length + data.length > PENDING_INPUT_MAX) return;
+  s.pendingInput += data;
+}
+
 export function writeToSession(leafId: number, data: string): boolean {
   const s = sessions.get(leafId);
-  if (!s || !s.pty) return false;
-  void s.pty.write(data);
+  if (!s || s.shellExited) return false;
+  if (s.pty) {
+    void s.pty.write(data);
+    return true;
+  }
+  queuePendingInput(s, data);
   return true;
 }
 
 export function submitToLeaf(leafId: number, text: string): void {
-  const pty = sessions.get(leafId)?.pty;
-  if (!pty) return;
+  const s = sessions.get(leafId);
+  if (!s || s.shellExited) return;
+  s.everSubmitted = true;
   // Bracketed paste keeps a multiline command atomic; trailing CR runs it.
-  if (text.includes("\n")) pty.write(`\x1b[200~${text}\x1b[201~\r`);
-  else pty.write(`${text}\r`);
+  const data = text.includes("\n")
+    ? `\x1b[200~${text}\x1b[201~\r`
+    : `${text}\r`;
+  if (s.pty) void s.pty.write(data);
+  else queuePendingInput(s, data);
 }
 
 export function interruptLeaf(leafId: number): void {
@@ -151,6 +175,24 @@ export function interruptLeaf(leafId: number): void {
 
 export function leafCwd(leafId: number): string | null {
   return sessions.get(leafId)?.lastCwd ?? null;
+}
+
+export function navigateFocusedBlocks(dir: -1 | 1): boolean {
+  for (const [, s] of sessions) {
+    if (!s.visibleNow || !s.focusedNow || !s.blockDecorations) continue;
+    s.blockDecorations.navigateBlocks(dir);
+    return true;
+  }
+  return false;
+}
+
+export function clearLeafBlockSelection(leafId: number): boolean {
+  return sessions.get(leafId)?.blockDecorations?.clearBlockSelection() ?? false;
+}
+
+export function leafGridSelection(leafId: number): string | null {
+  const sel = getSlotForLeaf(leafId)?.term.getSelection() ?? "";
+  return sel.length > 0 ? sel : null;
 }
 
 export function getLeafBlockMode(leafId: number): BlockMode {
@@ -188,6 +230,38 @@ export function getLeafDraft(leafId: number): string {
 export function setLeafDraft(leafId: number, text: string): void {
   const s = sessions.get(leafId);
   if (s) s.inputDraft = text;
+}
+
+export function setLeafInputActivity(leafId: number, active: boolean): void {
+  const s = sessions.get(leafId);
+  if (!s || s.inputActive === active) return;
+  s.inputActive = active;
+  const set = blockViewportListeners.get(leafId);
+  if (set) for (const l of set) l();
+}
+
+export type WatermarkState = "visible" | "hidden" | "dead";
+
+// Watermark gate: a block terminal that has never run a command, whose grid is
+// still untouched, and whose input is empty. Synchronous so tab switches, slot
+// rebinds and the Enter-to-OSC-133 gap never flash it over real content.
+// "dead" is permanent and lets the component unmount for good. The grid check
+// scans glyphs, not the cursor: the prompt integration prints a blank gap line
+// at spawn, so the cursor sits below row 0 even on a visually empty terminal.
+export function blockWatermarkState(leafId: number): WatermarkState {
+  const s = sessions.get(leafId);
+  if (!s || s.disposed) return "dead";
+  if (s.everSubmitted || s.blockDecorations?.hasAnyBlock()) return "dead";
+  if (!s.blockDecorations || s.inputActive) return "hidden";
+  const slot = getSlotForLeaf(leafId);
+  if (!slot) return "hidden";
+  const buf = slot.term.buffer.active;
+  if (buf.baseY > 0) return "dead";
+  const rows = Math.min(buf.length, slot.term.rows);
+  for (let i = 0; i < rows; i++) {
+    if (buf.getLine(i)?.translateToString(true)) return "dead";
+  }
+  return "visible";
 }
 
 /**
@@ -298,7 +372,8 @@ configureRendererPool({
           if (data.includes("\r")) void respawnSession(leafId);
           return;
         }
-        s.pty?.write(data);
+        if (s.pty) void s.pty.write(data);
+        else queuePendingInput(s, data);
       },
       resizePty: (cols, rows) => {
         s.cols = cols;
@@ -373,6 +448,7 @@ function ensureSession(
     snapshot: null,
     searchQuery: null,
     dormantRing: new DormantRing(),
+    pendingInput: "",
     hasSlot: false,
     blocks,
     blockMode: "prompt",
@@ -380,6 +456,8 @@ function ensureSession(
     blockDecorations: null,
     inputFocus: null,
     inputDraft: "",
+    inputActive: false,
+    everSubmitted: false,
     altScreenAtRelease: false,
     commandRunning: false,
     hiddenReleaseTimer: null,
@@ -455,6 +533,7 @@ async function openPtyForSession(
       onExit: (code) => {
         s.shellExited = true;
         s.pty = null;
+        s.pendingInput = "";
         s.commandRunning = false;
         const slot = getSlotForLeaf(leafId);
         if (slot) slot.term.options.disableStdin = true;
@@ -491,7 +570,12 @@ function applyBlockMode(leafId: number, mode: BlockMode): void {
     // Disable the helper textarea at the prompt so a grid click can't focus the
     // xterm (no flashing cursor) and can't steal focus from the shell input.
     if (slot.term.textarea) slot.term.textarea.disabled = prompt;
-    if (!prompt) slot.term.focus();
+    if (!prompt) {
+      slot.term.focus();
+    } else if (s.visibleNow && s.focusedNow) {
+      const inputFocus = s.inputFocus;
+      if (inputFocus) setTimeout(inputFocus, 0);
+    }
   }
   for (const l of s.blockListeners) l();
 }
@@ -513,6 +597,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
     rows: s.rows,
     registerOsc: (term) => {
       if (s.blocks) {
+        const osc52 = registerOsc52ClipboardHandler(term);
         const deco = new BlockDecorations(term, {
           onCwd: (next) => {
             markSessionReady(leafId);
@@ -534,6 +619,7 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         return [
           () => {
             s.blockDecorations = null;
+            osc52();
             deco.dispose();
             term.textarea?.removeEventListener("focus", onGridFocus);
           },
@@ -557,7 +643,8 @@ function bindLeafToSlot(leafId: number, s: Session): void {
         },
         shellState,
       );
-      return [prompt.dispose, cwd];
+      const osc52 = registerOsc52ClipboardHandler(term);
+      return [prompt.dispose, cwd, osc52];
     },
     onSearchReady: (addon) => s.callbacks.onSearchReady?.(addon),
   });
@@ -604,6 +691,11 @@ function attachSession(
           return;
         }
         s.pty = pty;
+        if (s.pendingInput) {
+          void pty.write(s.pendingInput);
+          s.pendingInput = "";
+        }
+        if (s.cols > 0 && s.rows > 0) pty.resize(s.cols, s.rows);
       })
       .catch((e) => {
         s.ptyOpening = false;
@@ -632,6 +724,7 @@ export async function respawnSession(
   s.dormantRing = new DormantRing();
   s.shellExited = false;
   s.pendingExit = null;
+  s.pendingInput = "";
   s.altScreenAtRelease = false;
   s.commandRunning = false;
   s.spawnFailed = false;
@@ -661,6 +754,11 @@ export async function respawnSession(
     return;
   }
   s.pty = pty;
+  if (s.pendingInput) {
+    void pty.write(s.pendingInput);
+    s.pendingInput = "";
+  }
+  if (s.cols > 0 && s.rows > 0) pty.resize(s.cols, s.rows);
 }
 
 export async function leafHasForegroundProcess(
@@ -693,6 +791,7 @@ export function disposeSession(leafId: number): void {
   s.snapshot = null;
   s.pty?.close();
   s.pty = null;
+  s.pendingInput = "";
   sessions.delete(leafId);
   blockViewportListeners.delete(leafId);
   readyLeaves.delete(leafId);
@@ -832,7 +931,12 @@ export function useTerminalSession({
   }, [leafId, visible, focused, blocks]);
 
   const write = useCallback(
-    (data: string) => sessions.get(leafId)?.pty?.write(data),
+    (data: string) => {
+      const s = sessions.get(leafId);
+      if (!s || s.shellExited) return;
+      if (s.pty) void s.pty.write(data);
+      else queuePendingInput(s, data);
+    },
     [leafId],
   );
 
@@ -877,12 +981,6 @@ export function useTerminalSession({
   const selectBlockAt = useCallback(
     (clientY: number) =>
       sessions.get(leafId)?.blockDecorations?.selectBlockAt(clientY),
-    [leafId],
-  );
-
-  const blockHoverAt = useCallback(
-    (clientY: number) =>
-      sessions.get(leafId)?.blockDecorations?.hoverAt(clientY) ?? null,
     [leafId],
   );
 
@@ -943,7 +1041,6 @@ export function useTerminalSession({
       applyTheme,
       blockMode,
       selectBlockAt,
-      blockHoverAt,
       readBlockId,
       subscribeBlocks,
       visibleBlocks,
@@ -959,7 +1056,6 @@ export function useTerminalSession({
       applyTheme,
       blockMode,
       selectBlockAt,
-      blockHoverAt,
       readBlockId,
       subscribeBlocks,
       visibleBlocks,

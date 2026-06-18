@@ -1,4 +1,5 @@
-import { cn } from "@/lib/utils";
+import { cn, isMarkdownPath } from "@/lib/utils";
+import { MarkdownViewToggle } from "@/modules/markdown";
 import type { EditorTab, Tab } from "@/modules/tabs";
 import { useEffect, useRef } from "react";
 import { EditorPane, type EditorPaneHandle } from "./EditorPane";
@@ -11,6 +12,7 @@ type Props = {
   onCloseTab: (id: number) => void;
   workspaceRoot: string | null;
   onOpenFileAt: (path: string, line: number) => void;
+  onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
 };
 
 export function EditorStack({
@@ -21,6 +23,7 @@ export function EditorStack({
   onCloseTab,
   workspaceRoot,
   onOpenFileAt,
+  onSetMarkdownView,
 }: Props) {
   const editors = tabs.filter(
     (t): t is EditorTab => t.kind === "editor" && !t.cold,
@@ -102,7 +105,15 @@ export function EditorStack({
             )}
             aria-hidden={!visible}
           >
-            <div className="h-full overflow-hidden rounded-md border border-border/60 bg-background">
+            <div className="relative h-full overflow-hidden rounded-md border border-border/60 bg-background">
+              {isMarkdownPath(t.path) && (
+                <MarkdownViewToggle
+                  mode="raw"
+                  onChange={(mode) => onSetMarkdownView(t.id, mode)}
+                  renderedDisabled={t.dirty}
+                  renderedHint="Save to preview"
+                />
+              )}
               <EditorPane
                 ref={getRefCallback(t.id)}
                 path={t.path}
