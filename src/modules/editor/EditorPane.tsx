@@ -6,7 +6,7 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import { type Extension, Prec } from "@codemirror/state";
+import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { vim } from "@replit/codemirror-vim";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -24,8 +24,9 @@ import {
   languageCompartment,
   lspCompartment,
   vimCompartment,
+  wrapCompartment,
 } from "./lib/extensions";
-import { resolveLanguage } from "./lib/languageResolver";
+import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { useDocument } from "./lib/useDocument";
 import { initVimGlobals, vimHandlersExtension } from "./lib/vim";
@@ -53,6 +54,7 @@ type Props = {
   path: string;
   workspaceRoot?: string | null;
   onOpenFileAt?: (path: string, line: number) => void;
+  overrideLanguage?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
@@ -66,7 +68,15 @@ function formatBytes(n: number): string {
 
 export const EditorPane = forwardRef<EditorPaneHandle, Props>(
   function EditorPane(
-    { path, workspaceRoot, onOpenFileAt, onDirtyChange, onSaved, onClose },
+    {
+      path,
+      workspaceRoot,
+      onOpenFileAt,
+      overrideLanguage,
+      onDirtyChange,
+      onSaved,
+      onClose,
+    },
     ref,
   ) {
     const { doc, onChange, save, reload } = useDocument({
@@ -78,6 +88,8 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     const cmRef = useRef<ReactCodeMirrorRef>(null);
     const themeExt = useEditorThemeExt();
     const vimMode = usePreferencesStore((s) => s.vimMode);
+    const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
+    const languageRef = useRef<string | null>(null);
     // Stabilize save + onSaved via refs so the extensions array never changes
     // identity — a new identity makes @uiw/react-codemirror reconfigure the
     // whole state, wiping the language compartment.
@@ -144,6 +156,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         vimCompartment.of(
           usePreferencesStore.getState().vimMode ? Prec.highest(vim()) : [],
         ),
+        wrapCompartment.of(
+          usePreferencesStore.getState().editorWordWrap
+            ? EditorView.lineWrapping
+            : [],
+        ),
         vimHandlersExtension(() => ({
           save: () => {
             void (async () => {
@@ -191,30 +208,42 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     }, [vimMode]);
 
     useEffect(() => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      view.dispatch({
+        effects: wrapCompartment.reconfigure(
+          editorWordWrap ? EditorView.lineWrapping : [],
+        ),
+      });
+    }, [editorWordWrap]);
+
+    useEffect(() => {
+      const ext =
+        overrideLanguage || (path.split(".").pop()?.toLowerCase() ?? null);
+      languageRef.current = ext;
       if (doc.status !== "ready") return;
       let cancelled = false;
-      const resolve = async (): Promise<Extension> => {
-        if (path.toLowerCase().endsWith(".terax-theme")) {
-          const [{ json }, { colorSwatches }] = await Promise.all([
-            import("@codemirror/lang-json"),
-            import("./lib/colorSwatches"),
-          ]);
-          return [json(), colorSwatches()];
-        }
-        return (await resolveLanguage(path)) ?? [];
+      const resolve = async (): Promise<LanguageResult> => {
+        const resolvePath = overrideLanguage
+          ? `dummy.${overrideLanguage}`
+          : path;
+        return (
+          (await resolveLanguage(resolvePath)) ?? { ext: [], name: "", id: "" }
+        );
       };
-      void resolve().then((extension) => {
+      void resolve().then((result) => {
         if (cancelled) return;
+        if (result.id) languageRef.current = result.id;
         const view = cmRef.current?.view;
         if (!view) return;
         view.dispatch({
-          effects: languageCompartment.reconfigure(extension),
+          effects: languageCompartment.reconfigure(result.ext),
         });
       });
       return () => {
         cancelled = true;
       };
-    }, [path, doc.status]);
+    }, [path, doc.status, overrideLanguage]);
 
     const onOpenFileAtRef = useRef(onOpenFileAt);
     useEffect(() => {

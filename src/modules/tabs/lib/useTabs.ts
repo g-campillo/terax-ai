@@ -49,6 +49,7 @@ export type EditorTab = TabBase & {
    * is replaced by the next single-click rather than accumulating.
    */
   preview: boolean;
+  overrideLanguage?: string | null;
 };
 
 export type PreviewTab = TabBase & {
@@ -128,6 +129,7 @@ export type TabPatch = Partial<{
   url: string;
   /** Empty string resets a terminal tab to its cwd-derived name. */
   customTitle: string;
+  overrideLanguage: string | null;
 }>;
 
 function basename(path: string): string {
@@ -179,6 +181,53 @@ export function reorderTabsByGap(
   const insertIdx = spaceTarget > spaceFrom ? anchorIdx + 1 : anchorIdx;
   next.splice(insertIdx, 0, moved);
   return next;
+}
+
+function coldTerminalTab(
+  tabId: number,
+  leafId: number,
+  spaceId: string,
+  cwd?: string,
+): TerminalTab {
+  return {
+    id: tabId,
+    kind: "terminal",
+    spaceId,
+    cold: true,
+    title: cwd ? basename(cwd) : "shell",
+    cwd,
+    paneTree: { kind: "leaf", id: leafId, cwd },
+    activeLeafId: leafId,
+  };
+}
+
+// Plans the removal of a deleted space's tabs while keeping the invariant that
+// the now-active `fallbackSpaceId` always has at least one tab (a cold one is
+// spawned when it would be left empty). Returns null when nothing to remove.
+export function planSpaceRemoval(
+  tabs: Tab[],
+  currentActiveId: number,
+  spaceId: string,
+  fallbackSpaceId: string,
+  fallbackCwd: string | undefined,
+  allocId: () => number,
+): { tabs: Tab[]; disposeLeafIds: number[]; activeId: number } | null {
+  const removed = tabs.filter((t) => t.spaceId === spaceId);
+  if (removed.length === 0) return null;
+  const disposeLeafIds = removed
+    .filter((t) => t.kind === "terminal")
+    .flatMap((t) => leafIds((t as TerminalTab).paneTree));
+  let next = tabs.filter((t) => t.spaceId !== spaceId);
+  let activeId = currentActiveId;
+  if (!next.some((t) => t.spaceId === fallbackSpaceId)) {
+    const tabId = allocId();
+    next = [...next, coldTerminalTab(tabId, allocId(), fallbackSpaceId, fallbackCwd)];
+    activeId = tabId;
+  } else if (!next.some((t) => t.id === currentActiveId)) {
+    const inFallback = next.filter((t) => t.spaceId === fallbackSpaceId);
+    activeId = inFallback[inFallback.length - 1].id;
+  }
+  return { tabs: next, disposeLeafIds, activeId };
 }
 
 export function useTabs(initial?: Partial<TerminalTab>) {
@@ -315,18 +364,27 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [],
   );
 
-  const removeTabsForSpace = useCallback((spaceId: string) => {
-    let toDispose: number[] = [];
-    setTabs((curr) => {
-      const next = curr.filter((t) => t.spaceId !== spaceId);
-      if (next.length === 0 || next.length === curr.length) return curr;
-      toDispose = curr
-        .filter((t) => t.spaceId === spaceId && t.kind === "terminal")
-        .flatMap((t) => leafIds((t as TerminalTab).paneTree));
-      return next;
-    });
-    for (const lid of toDispose) disposeSession(lid);
-  }, []);
+  const removeTabsForSpace = useCallback(
+    (spaceId: string, fallbackSpaceId: string, fallbackCwd?: string) => {
+      let toDispose: number[] = [];
+      setTabs((curr) => {
+        const plan = planSpaceRemoval(
+          curr,
+          activeIdRef.current,
+          spaceId,
+          fallbackSpaceId,
+          fallbackCwd,
+          () => nextIdRef.current++,
+        );
+        if (!plan) return curr;
+        toDispose = plan.disposeLeafIds;
+        setActiveId(plan.activeId);
+        return plan.tabs;
+      });
+      for (const lid of toDispose) disposeSession(lid);
+    },
+    [],
+  );
 
   const newTab = useCallback((cwd?: string) => {
     const tabId = nextIdRef.current++;
@@ -628,6 +686,18 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     return targetId;
   }, []);
 
+  const setOverrideLanguage = useCallback((id: number, lang: string | null) => {
+    setTabs((curr) =>
+      curr.map((t) => {
+        if (t.id !== id || t.kind !== "editor") return t;
+        return {
+          ...t,
+          overrideLanguage: lang,
+        };
+      }),
+    );
+  }, []);
+
   const setMarkdownView = useCallback(
     (id: number, mode: "rendered" | "raw") => {
       setTabs((curr) =>
@@ -643,6 +713,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
               kind: "editor" as const,
               dirty: false,
               preview: false,
+              overrideLanguage:
+                (t as { overrideLanguage?: string | null }).overrideLanguage ??
+                null,
             };
           }
           if (mode === "rendered" && t.kind === "editor") {
@@ -654,6 +727,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
               cold: t.cold,
               title: t.title,
               path: t.path,
+              overrideLanguage: t.overrideLanguage ?? null,
             };
           }
           return t;
@@ -868,6 +942,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           ...(patch.title !== undefined && { title: patch.title }),
           ...(patch.dirty !== undefined && { dirty: patch.dirty }),
           ...(patch.path !== undefined && { path: patch.path }),
+          ...(patch.overrideLanguage !== undefined && {
+            overrideLanguage: patch.overrideLanguage,
+          }),
         };
       }),
     );
@@ -1061,6 +1138,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     removeTabsForSpace,
     markBooted,
     setActiveSpaceForNewTabs,
+    setOverrideLanguage,
     newTab,
     newBlockTab,
     newAgentTab,

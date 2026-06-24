@@ -36,6 +36,7 @@ export function EditorStack({
   const registerRef = useRef(registerHandle);
   const dirtyRef = useRef(onDirtyChange);
   const closeRef = useRef(onCloseTab);
+
   useEffect(() => {
     registerRef.current = registerHandle;
   }, [registerHandle]);
@@ -117,6 +118,7 @@ export function EditorStack({
               <EditorPane
                 ref={getRefCallback(t.id)}
                 path={t.path}
+                overrideLanguage={t.overrideLanguage}
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
                 workspaceRoot={workspaceRoot}

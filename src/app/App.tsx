@@ -9,6 +9,7 @@ import { getLaunchDir } from "@/lib/launchDir";
 import { usePresence } from "@/lib/usePresence";
 import { quoteShellArg } from "@/lib/shellQuote";
 import { useZoom } from "@/lib/useZoom";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AgentNotificationsBridge } from "@/modules/agents";
 import {
   AgentRunBridge,
@@ -59,7 +60,9 @@ import {
 } from "@/modules/source-control";
 import { StatusBar } from "@/modules/statusbar";
 import {
+  TabSwitcherHud,
   useTabs,
+  useTabSwitcher,
   useWindowTitle,
   useWorkspaceCwd,
 } from "@/modules/tabs";
@@ -70,7 +73,6 @@ import {
   hasLeaf,
   leafIds,
   navigateFocusedBlocks,
-  respawnSession,
   type TerminalPaneHandle,
   useTerminalFileDrop,
   useWindowTransparency,
@@ -94,6 +96,7 @@ import {
   WorkspaceInputBar,
 } from "./components/WorkspaceInputBar";
 import { WorkspaceSurface } from "./components/WorkspaceSurface";
+import { useAppCloseGuard } from "./hooks/useAppCloseGuard";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
 
@@ -120,6 +123,7 @@ export default function App() {
     newPreviewTab,
     newMarkdownTab,
     setMarkdownView,
+    setOverrideLanguage,
     openAiDiffTab,
     closeAiDiffTab,
     openGitDiffTab,
@@ -350,6 +354,9 @@ export default function App() {
     handlePathDeleted,
   } = useTabCloseGuards({ tabs, disposeTab });
 
+  const { pendingAppClose, confirmAppClose, cancelAppClose } =
+    useAppCloseGuard(tabsRef);
+
   useEffect(() => {
     const live = new Set<number>();
     for (const t of tabs) {
@@ -367,18 +374,34 @@ export default function App() {
       if (!live.has(k)) searchAddons.current.delete(k);
   }, [tabs]);
 
-  const cycleTab = useCallback(
-    (delta: 1 | -1) => {
-      const scoped = tabsRef.current.filter(
-        (t) => t.spaceId === (activeSpaceId ?? DEFAULT_SPACE_ID),
-      );
-      if (scoped.length < 2) return;
-      const idx = scoped.findIndex((t) => t.id === activeId);
-      const nextIdx = (idx + delta + scoped.length) % scoped.length;
-      setActiveId(scoped[nextIdx].id);
+  // Most-recently-used tab ids, most recent first, pruned to live tabs. Drives
+  // the Ctrl+Tab quick switcher so it cycles by recency, not strip order.
+  const mruRef = useRef<number[]>([activeId]);
+  useEffect(() => {
+    mruRef.current = [activeId, ...mruRef.current.filter((id) => id !== activeId)];
+  }, [activeId]);
+  useEffect(() => {
+    const live = new Set(tabs.map((t) => t.id));
+    mruRef.current = mruRef.current.filter((id) => live.has(id));
+  }, [tabs]);
+
+  const getSwitcherOrder = useCallback(() => {
+    const space = activeSpaceId ?? DEFAULT_SPACE_ID;
+    const inSpace = tabsRef.current
+      .filter((t) => t.spaceId === space)
+      .map((t) => t.id);
+    const present = new Set(inSpace);
+    const ordered = mruRef.current.filter((id) => present.has(id));
+    for (const id of inSpace) if (!ordered.includes(id)) ordered.push(id);
+    return [activeId, ...ordered.filter((id) => id !== activeId)];
+  }, [activeId, activeSpaceId]);
+
+  const { state: switcherState, step: stepSwitcher } = useTabSwitcher({
+    getOrder: getSwitcherOrder,
+    onCommit: (id) => {
+      if (tabsRef.current.some((t) => t.id === id)) setActiveId(id);
     },
-    [activeId, activeSpaceId, setActiveId],
-  );
+  });
 
   const cycleSpace = useCallback((delta: 1 | -1) => {
     const { spaces, activeId: sid, setActive } = useSpaces.getState();
@@ -616,8 +639,8 @@ export default function App() {
       "tab.newPreview": () => openPreviewTab(""),
       "tab.newEditor": () => setNewEditorOpen(true),
       "tab.close": handleCloseTabOrPane,
-      "tab.next": () => cycleTab(1),
-      "tab.prev": () => cycleTab(-1),
+      "tab.next": () => stepSwitcher(1),
+      "tab.prev": () => stepSwitcher(-1),
       "tab.selectByIndex": (e) => selectByIndex(parseInt(e.key, 10) - 1),
       "space.next": () => cycleSpace(1),
       "space.prev": () => cycleSpace(-1),
@@ -650,7 +673,7 @@ export default function App() {
     [
       activeId,
       openCommandPalette,
-      cycleTab,
+      stepSwitcher,
       cycleSpace,
       handleCloseTabOrPane,
       openNewTab,
@@ -797,11 +820,9 @@ export default function App() {
         (t) => t.kind === "terminal" && hasLeaf(t.paneTree, leafId),
       );
       if (!tab || tab.kind !== "terminal") return;
-      const isLast =
-        leafIds(tab.paneTree).length === 1 &&
-        all.filter((t) => t.kind === "terminal").length === 1;
-      if (isLast) {
-        void respawnSession(leafId, tab.cwd);
+      // Last pane of the last tab: quit instead of respawning a shell.
+      if (leafIds(tab.paneTree).length === 1 && all.length === 1) {
+        void getCurrentWindow().close();
       } else {
         closePaneByLeaf(leafId);
       }
@@ -866,8 +887,12 @@ export default function App() {
 
   const handleDeleteSpace = useCallback(
     (id: string) => {
-      useSpaces.getState().remove(id);
-      removeTabsForSpace(id);
+      const nextSpaceId = useSpaces.getState().remove(id);
+      if (!nextSpaceId) return;
+      const root = useSpaces
+        .getState()
+        .spaces.find((s) => s.id === nextSpaceId)?.root;
+      removeTabsForSpace(id, nextSpaceId, root ?? undefined);
     },
     [removeTabsForSpace],
   );
@@ -1045,6 +1070,7 @@ export default function App() {
               spaceSwitcher={spaceSwitcher}
               searchTarget={searchTarget}
               searchRef={searchInlineRef}
+              onOverrideLanguage={setOverrideLanguage}
             />
           )}
 
@@ -1187,6 +1213,10 @@ export default function App() {
             />
           ) : null}
 
+          {switcherState && (
+            <TabSwitcherHud tabs={spaceTabs} state={switcherState} />
+          )}
+
           <CommandPalette
             open={commandPaletteOpen}
             onOpenChange={setCommandPaletteOpen}
@@ -1217,6 +1247,9 @@ export default function App() {
             pendingDeleteTabs={pendingDeleteTabs}
             onCancelDeleteClose={cancelDeleteClose}
             onConfirmDeleteClose={confirmDeleteClose}
+            pendingAppClose={pendingAppClose}
+            onCancelAppClose={cancelAppClose}
+            onConfirmAppClose={confirmAppClose}
           />
         </div>
       </TooltipProvider>
