@@ -178,6 +178,9 @@ function termOptions() {
     cursorInactiveStyle: "outline" as const,
     scrollback: prefs.terminalScrollback,
     allowProposedApi: true,
+    // Always allow transparency so terminalOpacity can take effect at runtime
+    // without recreating the terminal; at opacity 1 the background is opaque.
+    allowTransparency: true,
     minimumContrastRatio: bgActive(prefs) ? MCR_BG_ACTIVE : MCR_BG_INACTIVE,
   };
 }
@@ -767,6 +770,9 @@ const IDLE_SLOTS_KEEP_WARM = 1;
 function attachWebgl(slot: Slot): void {
   if (slot.webglAddon || !slot.term.element) return;
   if (!usePreferencesStore.getState().terminalWebglEnabled) return;
+  // The WebGL renderer can't composite a translucent background; fall back to
+  // the DOM renderer whenever the terminal is translucent.
+  if (usePreferencesStore.getState().terminalOpacity < 1) return;
   const elem = slot.term.element;
   const before = new Set<HTMLCanvasElement>(
     elem.querySelectorAll<HTMLCanvasElement>("canvas"),
@@ -929,6 +935,33 @@ export function applyTheme(): void {
   const theme = buildTerminalTheme();
   for (const slot of slots) {
     slot.term.options.theme = theme;
+  }
+}
+
+// Re-theme every slot so the new background alpha takes effect, and toggle the
+// WebGL renderer: it can't draw a translucent background, so translucent
+// terminals must use the DOM renderer.
+export function applyTerminalOpacity(opacity: number): void {
+  const theme = buildTerminalTheme();
+  const webglEnabled = usePreferencesStore.getState().terminalWebglEnabled;
+  for (const slot of slots) {
+    slot.term.options.theme = theme;
+    if (opacity < 1) {
+      if (slot.webglAddon) {
+        cancelWebglReap(slot);
+        disposeSlotWebgl(slot);
+      }
+    } else if (
+      webglEnabled &&
+      slot.currentLeafId !== null &&
+      !slot.parked &&
+      !slot.webglAddon
+    ) {
+      attachWebgl(slot);
+    }
+    try {
+      slot.term.refresh(0, slot.term.rows - 1);
+    } catch {}
   }
 }
 

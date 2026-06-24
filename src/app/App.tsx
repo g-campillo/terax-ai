@@ -73,6 +73,7 @@ import {
   respawnSession,
   type TerminalPaneHandle,
   useTerminalFileDrop,
+  useWindowTransparency,
   writeToSession,
 } from "@/modules/terminal";
 import {
@@ -160,6 +161,7 @@ export default function App() {
     useState<GitHistorySearchHandle | null>(null);
   const { zoomIn, zoomOut, zoomReset } = useZoom();
   useTerminalFileDrop();
+  useWindowTransparency();
   const explorerRef = useRef<FileExplorerHandle>(null);
 
   // Drives session disposal off the pane tree, not React lifecycles —
@@ -1019,7 +1021,7 @@ export default function App() {
   const shell = (
     <ThemeProvider>
       <TooltipProvider>
-        <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
+        <div className="terax-app-shell relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
           {!zenMode && (
             <Header
               tabs={spaceTabs}

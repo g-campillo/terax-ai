@@ -11,6 +11,7 @@ export {
   writeToSession,
 } from "./lib/useTerminalSession";
 export { useTerminalFileDrop } from "./lib/useTerminalFileDrop";
+export { useWindowTransparency } from "./lib/useWindowTransparency";
 export {
   findLeafCwd,
   hasLeaf,

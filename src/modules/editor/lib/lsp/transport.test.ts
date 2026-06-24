@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: a completion fixture intentionally contains ${n} LSP snippet placeholders
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
@@ -166,5 +167,47 @@ describe("TauriLspTransport", () => {
     });
     channelHandler?.({ type: "exited", code: 1 });
     await expect(prom).rejects.toThrow(/exited/);
+  });
+
+  it("collapses completion snippet args before resolving the request", async () => {
+    invokeMock.mockResolvedValue(7);
+    const t = new TauriLspTransport({
+      language: "typescript",
+      workspaceRoot: "/repo",
+    });
+    await t.connect();
+    invokeMock.mockResolvedValue(undefined);
+    const reqData = {
+      internalID: 5,
+      request: {
+        jsonrpc: "2.0",
+        id: 5,
+        method: "textDocument/completion",
+        params: {},
+      },
+    } as never;
+    const prom = t.sendData(reqData, 30000);
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("lsp_send", expect.anything());
+    });
+    channelHandler?.({
+      type: "message",
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 5,
+        result: {
+          isIncomplete: false,
+          items: [
+            {
+              label: "foo",
+              insertTextFormat: 2,
+              insertText: "foo(${1:a}, ${2:b})",
+            },
+          ],
+        },
+      }),
+    });
+    const res = (await prom) as { items: { insertText: string }[] };
+    expect(res.items[0]?.insertText).toBe("foo($0)");
   });
 });

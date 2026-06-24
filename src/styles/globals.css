@@ -191,6 +191,18 @@ html[data-chrome="borderless"] #settings-root {
   background: var(--background);
 }
 
+/* Terminal translucency: useWindowTransparency sets this attribute when the
+ * terminal opacity is below 100%. Drop the app's opaque base layers so the
+ * (optionally vibrancy-blurred) desktop shows through behind the see-through
+ * terminal. Opaque surfaces keep their own backgrounds — the sidebar/header
+ * (bg-card) and the non-terminal editor panes (bg-background, set in
+ * WorkspaceSurface) — so only the terminal region reveals what's behind. */
+html[data-terminal-translucent="1"] body,
+html[data-terminal-translucent="1"] #root,
+html[data-terminal-translucent="1"] .terax-app-shell {
+  background: transparent !important;
+}
+
 /*
  * xterm.js overrides — kept outside @layer so they win against the addon's
  * own stylesheet (which is not in any layer and would otherwise override).

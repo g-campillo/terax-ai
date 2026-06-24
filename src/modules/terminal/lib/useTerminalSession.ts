@@ -28,6 +28,7 @@ import {
   applyLetterSpacing,
   applyTheme as applyPoolTheme,
   applyScrollback,
+  applyTerminalOpacity,
   applyWebglPreference,
   configureRendererPool,
   discardRetainedSlot,
@@ -889,6 +890,11 @@ export function useTerminalSession({
   useEffect(() => {
     applyScrollback(scrollback);
   }, [scrollback]);
+
+  const terminalOpacity = usePreferencesStore((p) => p.terminalOpacity);
+  useEffect(() => {
+    applyTerminalOpacity(terminalOpacity);
+  }, [terminalOpacity]);
 
   const webglPref = usePreferencesStore((p) => p.terminalWebglEnabled);
   useEffect(() => {

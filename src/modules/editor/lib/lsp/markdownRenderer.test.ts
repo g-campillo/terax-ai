@@ -32,4 +32,13 @@ describe("htmlFromMarkdown", () => {
     expect(html).toContain('href="https://example.com"');
     expect(html).not.toContain("cm-lsp-file-link");
   });
+
+  // jdtls/sourcekit-lsp hover docs are full of generics like <T>; marked parses
+  // them as HTML tags and the sanitizer then drops them, leaving stray markup.
+  it("preserves inline type generics as text instead of dropping them as tags", () => {
+    const html = htmlFromMarkdown("Type Parameters: **<T>** value");
+    expect(html).toContain("&lt;T&gt;");
+    // No raw <T> element tag should leak through to be stripped later.
+    expect(html).not.toMatch(/<t>/i);
+  });
 });

@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import type { ThemePref } from "@/modules/settings/store";
+import type { TerminalBlur, ThemePref } from "@/modules/settings/store";
 import {
   setAgentNotifications,
   setAutostart,
@@ -28,15 +28,20 @@ import {
   setLspServerOverrides,
   setRestoreWindowState,
   setShowHidden,
+  setTerminalBlur,
   setTerminalCursorBlink,
   setTerminalFontFamily,
   setTerminalFontSize,
   setTerminalLetterSpacing,
+  setTerminalOpacity,
   setTerminalScrollback,
   setTerminalWebglEnabled,
   setVimMode,
   setZoomLevel,
+  TERMINAL_BLUR_LEVELS,
   TERMINAL_FONT_SIZES,
+  TERMINAL_OPACITY_MAX,
+  TERMINAL_OPACITY_MIN,
   TERMINAL_SCROLLBACK_PRESETS,
 } from "@/modules/settings/store";
 import { useTheme } from "@/modules/theme";
@@ -91,6 +96,8 @@ export function GeneralSection() {
   );
   const terminalFontSize = usePreferencesStore((s) => s.terminalFontSize);
   const terminalScrollback = usePreferencesStore((s) => s.terminalScrollback);
+  const terminalOpacity = usePreferencesStore((s) => s.terminalOpacity);
+  const terminalBlur = usePreferencesStore((s) => s.terminalBlur);
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const lspEnabled = usePreferencesStore((s) => s.lspEnabled);
   const formatOnSave = usePreferencesStore((s) => s.formatOnSave);
@@ -361,6 +368,49 @@ export function GeneralSection() {
                   className="text-[12px]"
                 >
                   {lines.toLocaleString()} lines
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingRow>
+        <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11.5px] text-muted-foreground">Opacity</span>
+            <span className="tabular-nums text-[11px] text-muted-foreground">
+              {Math.round(terminalOpacity * 100)}%
+            </span>
+          </div>
+          <Slider
+            value={[terminalOpacity]}
+            min={TERMINAL_OPACITY_MIN}
+            max={TERMINAL_OPACITY_MAX}
+            step={0.01}
+            onValueChange={(v) => void setTerminalOpacity(v[0] ?? 1)}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Below 100% the terminal turns translucent so the desktop shows
+            through behind it.
+          </p>
+        </div>
+        <SettingRow
+          title="Background blur"
+          description="Blur the desktop behind a translucent terminal (macOS). Needs opacity below 100%."
+        >
+          <Select
+            value={terminalBlur}
+            onValueChange={(v) => void setTerminalBlur(v as TerminalBlur)}
+          >
+            <SelectTrigger size="sm" className="h-8 w-28 text-[12px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TERMINAL_BLUR_LEVELS.map((lvl) => (
+                <SelectItem
+                  key={lvl}
+                  value={lvl}
+                  className="text-[12px] capitalize"
+                >
+                  {lvl}
                 </SelectItem>
               ))}
             </SelectContent>

@@ -7,6 +7,7 @@ import {
 } from "@open-rpc/client-js/build/Request";
 import { Transport } from "@open-rpc/client-js/build/transports/Transport";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { rewriteCompletionResult } from "./completionRewrite";
 import { lspConfigForSection } from "./serverConfig";
 
 export type LspEvent =
@@ -49,6 +50,9 @@ function configurationItems(params: unknown): unknown[] {
 export class TauriLspTransport extends Transport {
   private sessionId: number | null = null;
   private inflight = new Set<JSONRPCRequestData>();
+  // Outstanding textDocument/completion request ids, so their responses can be
+  // rewritten before marimo expands snippet placeholders (see rewriteCompletionResponse).
+  private completionRequestIds = new Set<number | string>();
 
   constructor(private readonly options: Options) {
     super();
@@ -65,7 +69,8 @@ export class TauriLspTransport extends Transport {
           void this.replyToServerRequest(payload);
           return;
         }
-        const err = this.transportRequestManager.resolveResponse(ev.data);
+        const data = this.rewriteCompletionResponse(payload, ev.data);
+        const err = this.transportRequestManager.resolveResponse(data);
         if (err) console.warn("lsp: unresolved server payload", err);
       } else if (ev.type === "exited") {
         const exitErr = new Error(`lsp server exited with code ${ev.code}`);
@@ -76,6 +81,7 @@ export class TauriLspTransport extends Transport {
           this.transportRequestManager.settlePendingRequest(batch, exitErr);
         }
         this.inflight.clear();
+        this.completionRequestIds.clear();
         this.sessionId = null;
         this.options.onExit?.(ev.code);
       }
@@ -102,6 +108,7 @@ export class TauriLspTransport extends Transport {
   ): Promise<unknown> {
     const prom = this.transportRequestManager.addRequest(data, timeout);
     this.inflight.add(data);
+    this.trackCompletionRequest(data);
     const clear = () => this.inflight.delete(data);
     (prom as Promise<unknown>).then(clear, clear);
     const notifications = getNotifications(data);
@@ -131,6 +138,28 @@ export class TauriLspTransport extends Transport {
     const id = this.sessionId;
     this.sessionId = null;
     void invoke("lsp_stop", { id });
+  }
+
+  // Completion is never batched, so only single requests are tracked.
+  private trackCompletionRequest(data: JSONRPCRequestData): void {
+    if (Array.isArray(data)) return;
+    const req = (data as IJSONRPCData).request;
+    if (req?.method === "textDocument/completion" && req.id != null) {
+      this.completionRequestIds.add(req.id);
+    }
+  }
+
+  // Collapse snippet placeholder args in completion responses to `name($0)` so
+  // accepting a completion leaves the cursor in empty parens instead of filling
+  // ${1:arg} placeholders. Only completion responses are rewritten; every other
+  // payload (hover, definition, signature help, errors) passes through verbatim.
+  private rewriteCompletionResponse(payload: unknown, raw: string): string {
+    if (typeof payload !== "object" || payload === null) return raw;
+    const p = payload as { id?: number | string; result?: unknown };
+    if (p.id == null || !this.completionRequestIds.has(p.id)) return raw;
+    this.completionRequestIds.delete(p.id);
+    if (!("result" in p)) return raw;
+    return JSON.stringify({ ...p, result: rewriteCompletionResult(p.result) });
   }
 
   // The marimo client only answers server requests on WebSocket transports

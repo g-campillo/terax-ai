@@ -144,6 +144,10 @@ export type Preferences = {
   terminalLetterSpacing: number;
   terminalFontSize: number;
   terminalScrollback: number;
+  // 1 = opaque (default). Below 1 the terminal becomes translucent so the
+  // (optionally blurred) desktop shows through behind it.
+  terminalOpacity: number;
+  terminalBlur: TerminalBlur;
   lastWslDistro: string | null;
   zoomLevel: number;
   agentNotifications: boolean;
@@ -197,6 +201,8 @@ const KEY_TERMINAL_FONT_FAMILY = "terminalFontFamily";
 const KEY_TERMINAL_LETTER_SPACING = "terminalLetterSpacing";
 const KEY_TERMINAL_FONT_SIZE = "terminalFontSize";
 const KEY_TERMINAL_SCROLLBACK = "terminalScrollback";
+const KEY_TERMINAL_OPACITY = "terminalOpacity";
+const KEY_TERMINAL_BLUR = "terminalBlur";
 const KEY_LAST_WSL_DISTRO = "lastWslDistro";
 const KEY_ZOOM_LEVEL = "zoomLevel";
 const KEY_AGENT_NOTIFICATIONS = "agentNotifications";
@@ -221,6 +227,20 @@ export const TERMINAL_SCROLLBACK_MAX = 50_000;
 export const TERMINAL_SCROLLBACK_PRESETS = [
   500, 1000, 2000, 5000, 10_000, 25_000,
 ] as const;
+
+export const TERMINAL_OPACITY_DEFAULT = 1;
+export const TERMINAL_OPACITY_MIN = 0.3;
+export const TERMINAL_OPACITY_MAX = 1;
+
+// Native window-vibrancy presets (mapped to NSVisualEffectMaterial in Rust).
+// "off" disables vibrancy entirely.
+export const TERMINAL_BLUR_LEVELS = [
+  "off",
+  "light",
+  "medium",
+  "strong",
+] as const;
+export type TerminalBlur = (typeof TERMINAL_BLUR_LEVELS)[number];
 
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: "system",
@@ -259,6 +279,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   terminalLetterSpacing: 0,
   terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,
   terminalScrollback: TERMINAL_SCROLLBACK_DEFAULT,
+  terminalOpacity: TERMINAL_OPACITY_DEFAULT,
+  terminalBlur: "off",
   lastWslDistro: null,
   zoomLevel: 1.0,
   agentNotifications: true,
@@ -393,6 +415,10 @@ export async function loadPreferences(): Promise<Preferences> {
       get<number>(KEY_TERMINAL_SCROLLBACK) ??
         DEFAULT_PREFERENCES.terminalScrollback,
     ),
+    terminalOpacity: clampOpacity(
+      get<number>(KEY_TERMINAL_OPACITY) ?? DEFAULT_PREFERENCES.terminalOpacity,
+    ),
+    terminalBlur: normalizeTerminalBlur(get<string>(KEY_TERMINAL_BLUR)),
     lastWslDistro:
       get<string | null>(KEY_LAST_WSL_DISTRO) ??
       DEFAULT_PREFERENCES.lastWslDistro,
@@ -602,6 +628,25 @@ export async function setTerminalScrollback(value: number): Promise<void> {
   await writePref(KEY_TERMINAL_SCROLLBACK, clampScrollback(value));
 }
 
+function clampOpacity(v: number): number {
+  if (!Number.isFinite(v)) return TERMINAL_OPACITY_DEFAULT;
+  return Math.min(TERMINAL_OPACITY_MAX, Math.max(TERMINAL_OPACITY_MIN, v));
+}
+
+function normalizeTerminalBlur(v: unknown): TerminalBlur {
+  return TERMINAL_BLUR_LEVELS.includes(v as TerminalBlur)
+    ? (v as TerminalBlur)
+    : "off";
+}
+
+export async function setTerminalOpacity(value: number): Promise<void> {
+  await writePref(KEY_TERMINAL_OPACITY, clampOpacity(value));
+}
+
+export async function setTerminalBlur(value: TerminalBlur): Promise<void> {
+  await writePref(KEY_TERMINAL_BLUR, normalizeTerminalBlur(value));
+}
+
 export async function setLastWslDistro(value: string | null): Promise<void> {
   await writePref(KEY_LAST_WSL_DISTRO, value);
 }
@@ -694,6 +739,8 @@ export async function onPreferencesChange(
     [KEY_TERMINAL_LETTER_SPACING]: "terminalLetterSpacing",
     [KEY_TERMINAL_FONT_SIZE]: "terminalFontSize",
     [KEY_TERMINAL_SCROLLBACK]: "terminalScrollback",
+    [KEY_TERMINAL_OPACITY]: "terminalOpacity",
+    [KEY_TERMINAL_BLUR]: "terminalBlur",
     [KEY_LAST_WSL_DISTRO]: "lastWslDistro",
     [KEY_ZOOM_LEVEL]: "zoomLevel",
     [KEY_AGENT_NOTIFICATIONS]: "agentNotifications",

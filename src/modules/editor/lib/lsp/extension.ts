@@ -5,6 +5,7 @@ import { languageServerWithClient } from "@marimo-team/codemirror-languageserver
 import { invoke } from "@tauri-apps/api/core";
 import { acquireLspClient, onLspClientError, releaseLspClient } from "./client";
 import { formatDocument } from "./format";
+import { goToDefinitionExtension } from "./goToDefinition";
 import { lspLanguageFor } from "./languages";
 import { renderLspMarkdown } from "./markdownRenderer";
 import { fileUriToPath, pathToFileUri } from "./uri";
@@ -69,6 +70,8 @@ type Deps = {
   path: string;
   workspaceRoot: string;
   onOpenFileAt: (path: string, line: number) => void;
+  // Center a 1-based line in the current pane (same-file go-to-definition).
+  scrollToLine: (line: number) => void;
   onServerError?: (message: string) => void;
   // Called once the server can serve language features (jdtls ServiceReady, or
   // first diagnostics / finished progress for servers that don't announce it).
@@ -79,6 +82,7 @@ export async function resolveLspExtension({
   path,
   workspaceRoot,
   onOpenFileAt,
+  scrollToLine,
   onServerError,
   onReady,
 }: Deps): Promise<LspResolveResult> {
@@ -145,23 +149,33 @@ export async function resolveLspExtension({
     markdownRenderer: renderLspMarkdown,
     // LSP completion is the editor's only completer.
     completionEnabled: true,
+    // Apply completions as CodeMirror snippets so our rewritten `name($0)`
+    // (see completionRewrite.ts) lands the cursor inside the empty parens
+    // instead of inserting a literal "$0". Default is false (raw text insert).
+    useSnippetOnCompletion: true,
     hoverEnabled: true,
     diagnosticsEnabled: true,
-    definitionEnabled: true,
+    // Go-to-definition is handled by goToDefinitionExtension (added below) so we
+    // can underline on Cmd/Ctrl-hover, scroll to same-file targets, and show a
+    // "No definition found" tooltip. Disable marimo's so they don't both fire.
+    definitionEnabled: false,
     renameEnabled: false,
     codeActionsEnabled: true,
     signatureHelpEnabled: true,
-    onGoToDefinition: (result) => {
-      const target = fileUriToPath(result.uri);
-      if (target !== path) {
-        onOpenFileAt(target, result.range.start.line + 1);
-      }
-    },
   });
   return {
     kind: "ready",
     handle: {
-      extension: [extension, fileLinkClickHandler(onOpenFileAt)],
+      extension: [
+        extension,
+        fileLinkClickHandler(onOpenFileAt),
+        goToDefinitionExtension({
+          client,
+          documentUri: pathToFileUri(path),
+          onOpenFileAt,
+          scrollToLine,
+        }),
+      ],
       status,
       format: (view: EditorView) => formatDocument(client, view, path),
       release: () => {

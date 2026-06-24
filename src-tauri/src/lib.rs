@@ -110,6 +110,35 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     Ok(())
 }
 
+/// Apply native window vibrancy so the desktop blurs behind translucent regions
+/// (the terminal). `level` is one of off | light | medium | strong. macOS uses
+/// NSVisualEffectView; other platforms are a no-op for now.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_window_vibrancy(app: tauri::AppHandle, level: String) -> Result<(), String> {
+    use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial};
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    if level == "off" {
+        let _ = clear_vibrancy(&window);
+        return Ok(());
+    }
+    let material = match level.as_str() {
+        "light" => NSVisualEffectMaterial::HudWindow,
+        "medium" => NSVisualEffectMaterial::UnderWindowBackground,
+        "strong" => NSVisualEffectMaterial::FullScreenUI,
+        _ => NSVisualEffectMaterial::HudWindow,
+    };
+    apply_vibrancy(&window, material, None, None).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn set_window_vibrancy(_app: tauri::AppHandle, _level: String) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let cli_dir = parse_launch_dir();
@@ -234,6 +263,7 @@ pub fn run() {
             workspace::workspace_current_dir,
             get_launch_dir,
             open_settings_window,
+            set_window_vibrancy,
             agent::agent_enable_claude_hooks,
             agent::agent_claude_hooks_status,
             secrets::secrets_get,

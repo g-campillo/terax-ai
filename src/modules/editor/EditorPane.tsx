@@ -100,10 +100,12 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     const statusRef = useRef(doc.status);
     statusRef.current = doc.status;
 
-    const applyPendingGoto = useCallback(() => {
+    // Center a 1-based line in the viewport. Shared by goto-line, the
+    // pending-goto applied once a doc is ready, and same-file go-to-definition
+    // (marimo moves the cursor but never scrolls it into view).
+    const scrollToLine = useCallback((line: number) => {
       const view = cmRef.current?.view;
-      const line = pendingLineRef.current;
-      if (!view || line == null || statusRef.current !== "ready") return;
+      if (!view) return;
       const target = Math.max(1, Math.min(line, view.state.doc.lines));
       const at = view.state.doc.line(target).from;
       view.dispatch({
@@ -111,8 +113,25 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
         effects: EditorView.scrollIntoView(at, { y: "center" }),
       });
       view.focus();
-      pendingLineRef.current = null;
     }, []);
+
+    const applyPendingGoto = useCallback(
+      (retries = 0) => {
+        const line = pendingLineRef.current;
+        if (line == null || statusRef.current !== "ready") return;
+        // Right after a fresh open the view ref / content can still be settling,
+        // so a cross-file go-to-definition would scroll a not-yet-ready view and
+        // land on the top. Retry a few frames until the view exists.
+        if (!cmRef.current?.view) {
+          if (retries < 60)
+            requestAnimationFrame(() => applyPendingGoto(retries + 1));
+          return;
+        }
+        scrollToLine(line);
+        pendingLineRef.current = null;
+      },
+      [scrollToLine],
+    );
 
     useEffect(() => {
       if (doc.status === "ready") applyPendingGoto();
@@ -201,6 +220,10 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
     useEffect(() => {
       onOpenFileAtRef.current = onOpenFileAt;
     }, [onOpenFileAt]);
+    const scrollToLineRef = useRef(scrollToLine);
+    useEffect(() => {
+      scrollToLineRef.current = scrollToLine;
+    }, [scrollToLine]);
     const lspReleaseRef = useRef<(() => void) | null>(null);
     // Set when a ready LSP handle is installed; the format command and
     // format-on-save call through it, and it's cleared when the server goes away.
@@ -246,6 +269,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
           path,
           workspaceRoot,
           onOpenFileAt: (p, line) => onOpenFileAtRef.current?.(p, line),
+          scrollToLine: (line) => scrollToLineRef.current(line),
           onServerError: (message) => {
             useLspStatusStore.getState().setStatus(path, {
               state: "error",

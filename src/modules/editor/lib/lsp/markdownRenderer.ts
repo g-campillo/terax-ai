@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { Marked } from "marked";
 
 // Hover and completion docs arrive from language servers as markdown. marimo's
 // client only runs a renderer when `allowHTMLContent` is enabled; supply this
@@ -11,14 +11,27 @@ import { marked } from "marked";
 // markers the hover click handler resolves via the editor's open-file callback.
 const FILE_ANCHOR_RE = /<a\s+href="(file:[^"]*)"\s*>/gi;
 
+const escapeHtml = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Dedicated marked instance (isolated from the global singleton) that renders
+// raw HTML tokens as escaped text. Language-server docs are full of inline type
+// generics like `<T>` / `<K, V>`; marked would otherwise parse them as tags and
+// the sanitizer would then drop them, leaving stray markup. We never want
+// server-supplied HTML rendered anyway, so escaping keeps the type text visible.
+const md = new Marked({ async: false, gfm: true, breaks: true });
+md.use({
+  renderer: {
+    html({ text }) {
+      return escapeHtml(text);
+    },
+  },
+});
+
 // marked + the file-link rewrite, without sanitization — pure and DOM-free so
 // it can be unit-tested. Not for direct use: its output is unsanitized.
 export function htmlFromMarkdown(markdown: string): string {
-  const html = marked.parse(markdown.trim(), {
-    async: false,
-    gfm: true,
-    breaks: true,
-  }) as string;
+  const html = md.parse(markdown.trim()) as string;
   return html.replace(
     FILE_ANCHOR_RE,
     (_match, uri: string) =>

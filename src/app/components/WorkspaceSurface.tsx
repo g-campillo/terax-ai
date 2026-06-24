@@ -93,7 +93,7 @@ export function WorkspaceSurface({
       </div>
       <div
         className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
+          "absolute inset-0 bg-background px-3 pt-2 pb-2",
           !isEditorTab && "invisible pointer-events-none",
         )}
         aria-hidden={!isEditorTab}
@@ -111,7 +111,7 @@ export function WorkspaceSurface({
       </div>
       <div
         className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
+          "absolute inset-0 bg-background px-3 pt-2 pb-2",
           !isPreviewTab && "invisible pointer-events-none",
         )}
         aria-hidden={!isPreviewTab}
@@ -125,7 +125,7 @@ export function WorkspaceSurface({
       </div>
       <div
         className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
+          "absolute inset-0 bg-background px-3 pt-2 pb-2",
           !isMarkdownTab && "invisible pointer-events-none",
         )}
         aria-hidden={!isMarkdownTab}
@@ -138,7 +138,7 @@ export function WorkspaceSurface({
       </div>
       <div
         className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
+          "absolute inset-0 bg-background px-3 pt-2 pb-2",
           !isAiDiffTab && "invisible pointer-events-none",
         )}
         aria-hidden={!isAiDiffTab}
@@ -152,7 +152,7 @@ export function WorkspaceSurface({
       </div>
       <div
         className={cn(
-          "absolute inset-0 px-3 pt-2 pb-2",
+          "absolute inset-0 bg-background px-3 pt-2 pb-2",
           !isGitDiffTab && "invisible pointer-events-none",
         )}
         aria-hidden={!isGitDiffTab}
@@ -161,7 +161,7 @@ export function WorkspaceSurface({
       </div>
       <div
         className={cn(
-          "absolute inset-0",
+          "absolute inset-0 bg-background",
           !isGitHistoryTab && "invisible pointer-events-none",
         )}
         aria-hidden={!isGitHistoryTab}

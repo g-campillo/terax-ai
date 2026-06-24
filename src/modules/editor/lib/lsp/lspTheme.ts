@@ -7,10 +7,14 @@ import { EditorView } from "@codemirror/view";
 // markdown content rendered inside those tooltips. Selectors mirror the
 // `&.cm-editor ...` scoping the shared theme already uses.
 
-// Markdown-body element selectors, applied inside both the hover card and the
-// completion info panel.
+// Markdown-body element selectors, applied inside every tooltip that renders
+// LSP markdown: the hover card (marimo's `.cm-tooltip.documentation`), our own
+// `.cm-lsp-hover-tooltip`, and the completion info panel. Without the
+// documentation container here, hover headings fall back to the browser's 2em
+// default — the "enormous import" tooltips — while body text stays 12px.
 const MD = [
   "&.cm-editor .cm-lsp-hover-tooltip",
+  "&.cm-editor .cm-tooltip.documentation",
   "&.cm-editor .cm-completionInfo",
 ];
 const md = (suffix: string) => MD.map((base) => `${base} ${suffix}`).join(", ");
@@ -43,19 +47,24 @@ export const lspTooltipTheme = EditorView.theme({
     borderRadius: "6px",
     backgroundColor: "var(--popover)",
     color: "var(--popover-foreground)",
-    maxWidth: "34rem",
+    // Consistent size across every tooltip type (see hover card below).
+    minWidth: "18rem",
+    maxWidth: "32rem",
     maxHeight: "24rem",
     overflow: "auto",
-    fontSize: "12px",
+    fontSize: "12.5px",
     lineHeight: "1.5",
   },
   // ── Hover card ─────────────────────────────────────────────────────────
+  // Same min/max width, height, and font-size as the completion info panel so
+  // hovers don't swing between cramped and oversized.
   "&.cm-editor .cm-tooltip.documentation, &.cm-editor .cm-lsp-hover-tooltip": {
     padding: "8px 10px",
-    maxWidth: "38rem",
-    maxHeight: "26rem",
+    minWidth: "18rem",
+    maxWidth: "32rem",
+    maxHeight: "24rem",
     overflow: "auto",
-    fontSize: "12px",
+    fontSize: "12.5px",
     lineHeight: "1.5",
   },
   // ── Signature help (override marimo's inline #666 / hard borders) ───────
@@ -117,4 +126,17 @@ export const lspTooltipTheme = EditorView.theme({
     textDecoration: "none",
   },
   "&.cm-editor .cm-lsp-file-link:hover": { textDecoration: "underline" },
+  // ── Go-to-definition (goToDefinition.ts) ───────────────────────────────
+  // Underline the symbol under the pointer while Cmd/Ctrl is held.
+  "&.cm-editor .cm-lsp-definition-link": {
+    textDecoration: "underline",
+    textUnderlineOffset: "2px",
+    cursor: "pointer",
+  },
+  // "No definition found" transient tooltip.
+  "&.cm-editor .cm-lsp-no-definition": {
+    padding: "3px 8px",
+    fontSize: "12px",
+    color: "var(--popover-foreground)",
+  },
 });

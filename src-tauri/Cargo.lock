@@ -5402,6 +5402,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tempfile",
  "tokio",
+ "window-vibrancy",
  "windows-sys 0.61.2",
 ]
 
